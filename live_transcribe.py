@@ -259,6 +259,9 @@ class LiveTranscriber:
         self.print_lock = threading.Lock()
         self.gpu_lock = threading.Lock()  # Serialize Metal/MLX operations (Whisper + Qwen)
         self.transcription_pool = ThreadPoolExecutor(max_workers=1)
+        # Backlog tracking for adaptive VAD (see _adaptive_thresholds)
+        self._pending_count = 0
+        self._pending_lock = threading.Lock()
         # Qwen serializes on GPU anyway, so 1 worker suffices; others can parallelize
         translation_workers = 1 if isinstance(translator, QwenTranslator) else 4
         self.translation_pool = ThreadPoolExecutor(max_workers=translation_workers) if translator else None
@@ -360,6 +363,18 @@ class LiveTranscriber:
                 with self.vad_lock:
                     self.audio_queue.appendleft(raw_audio[offset:])
 
+    def _submit_transcription(self, audio_data):
+        """Submit an audio segment for transcription and track it in the backlog counter."""
+        with self._pending_lock:
+            self._pending_count += 1
+        fut = self.transcription_pool.submit(self._transcribe_segment, audio_data)
+        fut.add_done_callback(lambda _f: self._dec_pending())
+
+    def _dec_pending(self):
+        """Called from the worker thread after each transcription completes (success or failure)."""
+        with self._pending_lock:
+            self._pending_count = max(0, self._pending_count - 1)
+
     def _flush_speech_buffer(self):
         """Send accumulated speech buffer to transcription and reset VAD state."""
         if not self.speech_buffer:
@@ -388,7 +403,7 @@ class LiveTranscriber:
         # Audio preprocessing pipeline
         audio_data = self._preprocess_audio(audio_data)
 
-        self.transcription_pool.submit(self._transcribe_segment, audio_data)
+        self._submit_transcription(audio_data)
 
     def _preprocess_audio(self, audio):
         """Apply high-pass filter and peak normalization for cleaner transcription."""
