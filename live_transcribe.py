@@ -151,8 +151,9 @@ def load_vad_model():
 class SpeakerTracker:
     """Track and identify speakers using voice embeddings."""
 
-    def __init__(self):
-        if DIARIZATION_AVAILABLE:
+    def __init__(self, enabled=True):
+        self.enabled = enabled and DIARIZATION_AVAILABLE
+        if self.enabled:
             print("Loading speaker encoder model...")
             self.encoder = VoiceEncoder()
             print("Speaker encoder ready.")
@@ -165,7 +166,7 @@ class SpeakerTracker:
 
     def identify_speaker(self, audio_chunk):
         """Identify or register a speaker from an audio chunk."""
-        if not DIARIZATION_AVAILABLE or self.encoder is None:
+        if not self.enabled or self.encoder is None:
             return "Speaker"
 
         if len(audio_chunk) < SAMPLE_RATE * 0.5:  # Need at least 0.5s
@@ -245,9 +246,9 @@ class LiveTranscriber:
 
     def __init__(self, device_index, translator=None, translate_langs=None,
                  target_lang="en", model_repo=WHISPER_MODEL, display_mode="columns",
-                 summarizer=None):
+                 summarizer=None, diarize=False):
         self.device_index = device_index
-        self.speaker_tracker = SpeakerTracker()
+        self.speaker_tracker = SpeakerTracker(enabled=diarize)
         self.translator = translator
         self.translate_langs = translate_langs or set()
         self.target_lang = target_lang
@@ -775,7 +776,7 @@ class LiveTranscriber:
         print(f"  VAD threshold: {VAD_THRESHOLD}")
         print(f"  Silence trigger: {SILENCE_AFTER_SPEECH}s")
         print(f"  Max speech segment: {MAX_SPEECH_DURATION}s")
-        print(f"  Speaker diarization: {'ON' if DIARIZATION_AVAILABLE else 'OFF'}")
+        print(f"  Speaker diarization: {'ON' if self.speaker_tracker.enabled else 'OFF'}")
         print(f"  Display mode: {self.display.__class__.__name__}")
         print(f"  Live summary: {'ON' if self.summarizer else 'OFF'}")
         if self.translator:
@@ -860,6 +861,8 @@ def main():
                         help="Display mode: columns (side-by-side) or chat (bubble UI)")
     parser.add_argument("--summary", choices=["on", "off"], default=None,
                         help="Enable live rolling summary via local LLM")
+    parser.add_argument("--diarize", choices=["on", "off"], default="off",
+                        help="Speaker diarization (default: off)")
     args = parser.parse_args()
 
     print("\n\033[1mLive Transcribe - System Audio\033[0m\n")
@@ -1037,6 +1040,7 @@ def main():
         device_idx, translator=translator,
         translate_langs=translate_langs, target_lang=target_lang,
         model_repo=model_repo, display_mode=display_mode, summarizer=summarizer,
+        diarize=(args.diarize == "on"),
     )
 
     # Share the GPU lock with Qwen so Whisper and Qwen don't collide on Metal
