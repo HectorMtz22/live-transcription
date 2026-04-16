@@ -286,7 +286,6 @@ class LiveTranscriber:
         self.audio_queue = deque()  # Raw audio frames waiting for VAD processing
         self.speech_buffer = []     # Accumulated audio during speech
         self.is_speaking = False
-        self.speech_start_time = 0.0
         self.silence_start_time = 0.0
         self.vad_lock = threading.Lock()
 
@@ -332,17 +331,21 @@ class LiveTranscriber:
 
                 now = time.monotonic()
 
+                silence_cap, max_speech_cap = self._adaptive_thresholds()
+
                 if speech_prob >= VAD_THRESHOLD:
                     # Speech detected
                     if not self.is_speaking:
                         self.is_speaking = True
-                        self.speech_start_time = now
                     self.silence_start_time = 0.0
                     self.speech_buffer.append(frame)
 
-                    # Force transcription if speech is too long
-                    speech_duration = now - self.speech_start_time
-                    if speech_duration >= MAX_SPEECH_DURATION:
+                    # Force transcription if speech is too long (measured from
+                    # actual samples, not wall clock — wall clock drifts when
+                    # the VAD thread is catching up on queued audio).
+                    speech_samples = sum(len(f) for f in self.speech_buffer)
+                    speech_duration = speech_samples / SAMPLE_RATE
+                    if speech_duration >= max_speech_cap:
                         self._flush_speech_buffer()
 
                 else:
@@ -353,7 +356,7 @@ class LiveTranscriber:
 
                         if self.silence_start_time == 0.0:
                             self.silence_start_time = now
-                        elif now - self.silence_start_time >= SILENCE_AFTER_SPEECH:
+                        elif now - self.silence_start_time >= silence_cap:
                             # Enough silence after speech — trigger transcription
                             self._flush_speech_buffer()
 
@@ -362,6 +365,17 @@ class LiveTranscriber:
             if remainder > 0:
                 with self.vad_lock:
                     self.audio_queue.appendleft(raw_audio[offset:])
+
+    def _adaptive_thresholds(self):
+        """Return (silence_after_speech, max_speech_duration) scaled by current backlog.
+
+        Grows linearly with pending transcriptions so Whisper gets fewer, bigger
+        chunks when it's falling behind. Capped to prevent runaway latency.
+        """
+        p = self._pending_count  # int read is atomic in CPython; no lock needed
+        silence = min(SILENCE_AFTER_SPEECH + 0.5 * p, 2.0)
+        max_speech = min(MAX_SPEECH_DURATION + 3.0 * p, 15.0)
+        return silence, max_speech
 
     def _submit_transcription(self, audio_data):
         """Submit an audio segment for transcription and track it in the backlog counter."""
