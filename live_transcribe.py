@@ -307,64 +307,72 @@ class LiveTranscriber:
         """Process audio through VAD and trigger transcription on speech boundaries."""
         global running
 
-        while running:
-            # Grab any queued audio
-            with self.vad_lock:
-                if not self.audio_queue:
-                    time.sleep(0.01)
-                    continue
-                chunks = list(self.audio_queue)
-                self.audio_queue.clear()
+        try:
+            while running:
+                # Grab any queued audio
+                with self.vad_lock:
+                    if not self.audio_queue:
+                        time.sleep(0.01)
+                        continue
+                    chunks = list(self.audio_queue)
+                    self.audio_queue.clear()
 
-            # Concatenate all queued audio into one array
-            raw_audio = np.concatenate(chunks)
+                # Concatenate all queued audio into one array
+                raw_audio = np.concatenate(chunks)
 
-            # Process in VAD_FRAME_SAMPLES-sized frames
-            offset = 0
-            while offset + VAD_FRAME_SAMPLES <= len(raw_audio):
-                frame = raw_audio[offset:offset + VAD_FRAME_SAMPLES]
-                offset += VAD_FRAME_SAMPLES
+                # Process in VAD_FRAME_SAMPLES-sized frames
+                offset = 0
+                while offset + VAD_FRAME_SAMPLES <= len(raw_audio):
+                    frame = raw_audio[offset:offset + VAD_FRAME_SAMPLES]
+                    offset += VAD_FRAME_SAMPLES
 
-                # Run VAD on this frame
-                frame_tensor = torch.from_numpy(frame).float()
-                speech_prob = self.vad_model(frame_tensor, SAMPLE_RATE).item()
+                    # Run VAD on this frame
+                    frame_tensor = torch.from_numpy(frame).float()
+                    speech_prob = self.vad_model(frame_tensor, SAMPLE_RATE).item()
 
-                now = time.monotonic()
+                    now = time.monotonic()
 
-                silence_cap, max_speech_cap = self._adaptive_thresholds()
+                    silence_cap, max_speech_cap = self._adaptive_thresholds()
 
-                if speech_prob >= VAD_THRESHOLD:
-                    # Speech detected
-                    if not self.is_speaking:
-                        self.is_speaking = True
-                    self.silence_start_time = 0.0
-                    self.speech_buffer.append(frame)
-
-                    # Force transcription if speech is too long (measured from
-                    # actual samples, not wall clock — wall clock drifts when
-                    # the VAD thread is catching up on queued audio).
-                    speech_samples = sum(len(f) for f in self.speech_buffer)
-                    speech_duration = speech_samples / SAMPLE_RATE
-                    if speech_duration >= max_speech_cap:
-                        self._flush_speech_buffer()
-
-                else:
-                    # Silence / non-speech
-                    if self.is_speaking:
-                        # Still accumulate audio during short pauses
+                    if speech_prob >= VAD_THRESHOLD:
+                        # Speech detected
+                        if not self.is_speaking:
+                            self.is_speaking = True
+                        self.silence_start_time = 0.0
                         self.speech_buffer.append(frame)
 
-                        if self.silence_start_time == 0.0:
-                            self.silence_start_time = now
-                        elif now - self.silence_start_time >= silence_cap:
-                            # Enough silence after speech — trigger transcription
+                        # Force transcription if speech is too long (measured from
+                        # actual samples, not wall clock — wall clock drifts when
+                        # the VAD thread is catching up on queued audio).
+                        speech_samples = sum(len(f) for f in self.speech_buffer)
+                        speech_duration = speech_samples / SAMPLE_RATE
+                        if speech_duration >= max_speech_cap:
                             self._flush_speech_buffer()
 
-            # Keep any leftover samples for the next iteration
-            remainder = len(raw_audio) - offset
-            if remainder > 0:
-                with self.vad_lock:
-                    self.audio_queue.appendleft(raw_audio[offset:])
+                    else:
+                        # Silence / non-speech
+                        if self.is_speaking:
+                            # Still accumulate audio during short pauses
+                            self.speech_buffer.append(frame)
+
+                            if self.silence_start_time == 0.0:
+                                self.silence_start_time = now
+                            elif now - self.silence_start_time >= silence_cap:
+                                # Enough silence after speech — trigger transcription
+                                self._flush_speech_buffer()
+
+                # Keep any leftover samples for the next iteration
+                remainder = len(raw_audio) - offset
+                if remainder > 0:
+                    with self.vad_lock:
+                        self.audio_queue.appendleft(raw_audio[offset:])
+        finally:
+            # On shutdown, transcribe whatever is still buffered so the last
+            # utterance isn't lost. _flush_speech_buffer submits to the pool;
+            # transcription_pool.shutdown(wait=True) in start()'s finally
+            # blocks until that submission completes.
+            if self.speech_buffer:
+                self._flush_speech_buffer()
 
     def _adaptive_thresholds(self):
         """Return (silence_after_speech, max_speech_duration) scaled by current backlog.
