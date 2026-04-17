@@ -33,6 +33,7 @@ class NLLBTranslator:
             print(f"Loading NLLB-200 model '{model_name}'...")
             self._tokenizer = AutoTokenizer.from_pretrained(model_name)
             self._model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+            self._model.generation_config.max_length = None
             self._available = True
             print("NLLB-200 model ready.")
         except Exception as e:
