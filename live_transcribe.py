@@ -41,10 +41,13 @@ import torch
 from display_columns import ColumnsDisplay
 from display_chat import ChatDisplay
 from summarizer import SummarizerProcess
-from translator import Translator
-from deepl_translator import DeepLTranslator
-from qwen_translator import QwenTranslator
-from nllb_translator import NLLBTranslator
+from live_transcribe_core.translators import (
+    DeepLTranslator,
+    GoogleTranslator as Translator,
+    NLLBTranslator,
+    QwenTranslator,
+    set_gpu_lock,
+)
 
 # Try to import resemblyzer for speaker diarization
 try:
@@ -1044,8 +1047,7 @@ def main():
     )
 
     # Share the GPU lock with Qwen so Whisper and Qwen don't collide on Metal
-    if isinstance(translator, QwenTranslator):
-        translator._gpu_lock = transcriber.gpu_lock
+    set_gpu_lock(translator, transcriber.gpu_lock)
 
     transcriber.start()
 
