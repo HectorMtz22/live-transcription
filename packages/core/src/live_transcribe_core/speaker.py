@@ -1,6 +1,12 @@
 import numpy as np
 
-SAMPLE_RATE = 16000  # Will be sourced from core.config in Task 3
+from live_transcribe_core.config import (
+    MAX_SPEAKERS,
+    MIN_CHUNKS_NEW_SPEAKER,
+    NUM_SPEAKERS,
+    SAMPLE_RATE,
+    SPEAKER_SIMILARITY,
+)
 
 # Try to import resemblyzer for speaker diarization
 try:
@@ -9,11 +15,6 @@ try:
 except ImportError:
     DIARIZATION_AVAILABLE = False
     print("[WARN] resemblyzer not available - speaker separation disabled")
-
-SPEAKER_SIMILARITY = 0.72    # Cosine similarity threshold for same speaker (lower = more lenient matching)
-NUM_SPEAKERS = 2             # Expected number of speakers (once reached, assigns to closest match)
-MAX_SPEAKERS = 3             # Maximum number of speakers to track
-MIN_CHUNKS_NEW_SPEAKER = 4   # Require N consecutive unmatched chunks before creating a new speaker
 
 
 class SpeakerTracker:
