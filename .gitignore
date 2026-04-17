@@ -2,6 +2,7 @@
 whisper-large-v3-ko-mlx/
 transcripts/
 whisper-ko-lora/
+docs/superpowers/
 
 ### macOS ###
 # General

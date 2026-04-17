@@ -151,8 +151,9 @@ def load_vad_model():
 class SpeakerTracker:
     """Track and identify speakers using voice embeddings."""
 
-    def __init__(self):
-        if DIARIZATION_AVAILABLE:
+    def __init__(self, enabled=True):
+        self.enabled = enabled and DIARIZATION_AVAILABLE
+        if self.enabled:
             print("Loading speaker encoder model...")
             self.encoder = VoiceEncoder()
             print("Speaker encoder ready.")
@@ -165,7 +166,7 @@ class SpeakerTracker:
 
     def identify_speaker(self, audio_chunk):
         """Identify or register a speaker from an audio chunk."""
-        if not DIARIZATION_AVAILABLE or self.encoder is None:
+        if not self.enabled or self.encoder is None:
             return "Speaker"
 
         if len(audio_chunk) < SAMPLE_RATE * 0.5:  # Need at least 0.5s
@@ -245,9 +246,9 @@ class LiveTranscriber:
 
     def __init__(self, device_index, translator=None, translate_langs=None,
                  target_lang="en", model_repo=WHISPER_MODEL, display_mode="columns",
-                 summarizer=None):
+                 summarizer=None, diarize=False):
         self.device_index = device_index
-        self.speaker_tracker = SpeakerTracker()
+        self.speaker_tracker = SpeakerTracker(enabled=diarize)
         self.translator = translator
         self.translate_langs = translate_langs or set()
         self.target_lang = target_lang
@@ -259,6 +260,9 @@ class LiveTranscriber:
         self.print_lock = threading.Lock()
         self.gpu_lock = threading.Lock()  # Serialize Metal/MLX operations (Whisper + Qwen)
         self.transcription_pool = ThreadPoolExecutor(max_workers=1)
+        # Backlog tracking for adaptive VAD (see _adaptive_thresholds)
+        self._pending_count = 0
+        self._pending_lock = threading.Lock()
         # Qwen serializes on GPU anyway, so 1 worker suffices; others can parallelize
         translation_workers = 1 if isinstance(translator, QwenTranslator) else 4
         self.translation_pool = ThreadPoolExecutor(max_workers=translation_workers) if translator else None
@@ -283,7 +287,6 @@ class LiveTranscriber:
         self.audio_queue = deque()  # Raw audio frames waiting for VAD processing
         self.speech_buffer = []     # Accumulated audio during speech
         self.is_speaking = False
-        self.speech_start_time = 0.0
         self.silence_start_time = 0.0
         self.vad_lock = threading.Lock()
 
@@ -305,60 +308,95 @@ class LiveTranscriber:
         """Process audio through VAD and trigger transcription on speech boundaries."""
         global running
 
-        while running:
-            # Grab any queued audio
-            with self.vad_lock:
-                if not self.audio_queue:
-                    time.sleep(0.01)
-                    continue
-                chunks = list(self.audio_queue)
-                self.audio_queue.clear()
+        try:
+            while running:
+                # Grab any queued audio
+                with self.vad_lock:
+                    if not self.audio_queue:
+                        time.sleep(0.01)
+                        continue
+                    chunks = list(self.audio_queue)
+                    self.audio_queue.clear()
 
-            # Concatenate all queued audio into one array
-            raw_audio = np.concatenate(chunks)
+                # Concatenate all queued audio into one array
+                raw_audio = np.concatenate(chunks)
 
-            # Process in VAD_FRAME_SAMPLES-sized frames
-            offset = 0
-            while offset + VAD_FRAME_SAMPLES <= len(raw_audio):
-                frame = raw_audio[offset:offset + VAD_FRAME_SAMPLES]
-                offset += VAD_FRAME_SAMPLES
+                # Process in VAD_FRAME_SAMPLES-sized frames
+                offset = 0
+                while offset + VAD_FRAME_SAMPLES <= len(raw_audio):
+                    frame = raw_audio[offset:offset + VAD_FRAME_SAMPLES]
+                    offset += VAD_FRAME_SAMPLES
 
-                # Run VAD on this frame
-                frame_tensor = torch.from_numpy(frame).float()
-                speech_prob = self.vad_model(frame_tensor, SAMPLE_RATE).item()
+                    # Run VAD on this frame
+                    frame_tensor = torch.from_numpy(frame).float()
+                    speech_prob = self.vad_model(frame_tensor, SAMPLE_RATE).item()
 
-                now = time.monotonic()
+                    now = time.monotonic()
 
-                if speech_prob >= VAD_THRESHOLD:
-                    # Speech detected
-                    if not self.is_speaking:
-                        self.is_speaking = True
-                        self.speech_start_time = now
-                    self.silence_start_time = 0.0
-                    self.speech_buffer.append(frame)
+                    silence_cap, max_speech_cap = self._adaptive_thresholds()
 
-                    # Force transcription if speech is too long
-                    speech_duration = now - self.speech_start_time
-                    if speech_duration >= MAX_SPEECH_DURATION:
-                        self._flush_speech_buffer()
-
-                else:
-                    # Silence / non-speech
-                    if self.is_speaking:
-                        # Still accumulate audio during short pauses
+                    if speech_prob >= VAD_THRESHOLD:
+                        # Speech detected
+                        if not self.is_speaking:
+                            self.is_speaking = True
+                        self.silence_start_time = 0.0
                         self.speech_buffer.append(frame)
 
-                        if self.silence_start_time == 0.0:
-                            self.silence_start_time = now
-                        elif now - self.silence_start_time >= SILENCE_AFTER_SPEECH:
-                            # Enough silence after speech — trigger transcription
+                        # Force transcription if speech is too long (measured from
+                        # actual samples, not wall clock — wall clock drifts when
+                        # the VAD thread is catching up on queued audio).
+                        speech_samples = sum(len(f) for f in self.speech_buffer)
+                        speech_duration = speech_samples / SAMPLE_RATE
+                        if speech_duration >= max_speech_cap:
                             self._flush_speech_buffer()
 
-            # Keep any leftover samples for the next iteration
-            remainder = len(raw_audio) - offset
-            if remainder > 0:
-                with self.vad_lock:
-                    self.audio_queue.appendleft(raw_audio[offset:])
+                    else:
+                        # Silence / non-speech
+                        if self.is_speaking:
+                            # Still accumulate audio during short pauses
+                            self.speech_buffer.append(frame)
+
+                            if self.silence_start_time == 0.0:
+                                self.silence_start_time = now
+                            elif now - self.silence_start_time >= silence_cap:
+                                # Enough silence after speech — trigger transcription
+                                self._flush_speech_buffer()
+
+                # Keep any leftover samples for the next iteration
+                remainder = len(raw_audio) - offset
+                if remainder > 0:
+                    with self.vad_lock:
+                        self.audio_queue.appendleft(raw_audio[offset:])
+        finally:
+            # On shutdown, transcribe whatever is still buffered so the last
+            # utterance isn't lost. _flush_speech_buffer submits to the pool;
+            # transcription_pool.shutdown(wait=True) in start()'s finally
+            # blocks until that submission completes.
+            if self.speech_buffer:
+                self._flush_speech_buffer()
+
+    def _adaptive_thresholds(self):
+        """Return (silence_after_speech, max_speech_duration) scaled by current backlog.
+
+        Grows linearly with pending transcriptions so Whisper gets fewer, bigger
+        chunks when it's falling behind. Capped to prevent runaway latency.
+        """
+        p = self._pending_count  # int read is atomic in CPython; no lock needed
+        silence = min(SILENCE_AFTER_SPEECH + 0.5 * p, 2.0)
+        max_speech = min(MAX_SPEECH_DURATION + 3.0 * p, 15.0)
+        return silence, max_speech
+
+    def _submit_transcription(self, audio_data):
+        """Submit an audio segment for transcription and track it in the backlog counter."""
+        with self._pending_lock:
+            self._pending_count += 1
+        fut = self.transcription_pool.submit(self._transcribe_segment, audio_data)
+        fut.add_done_callback(lambda _f: self._dec_pending())
+
+    def _dec_pending(self):
+        """Called from the worker thread after each transcription completes (success or failure)."""
+        with self._pending_lock:
+            self._pending_count = max(0, self._pending_count - 1)
 
     def _flush_speech_buffer(self):
         """Send accumulated speech buffer to transcription and reset VAD state."""
@@ -388,7 +426,7 @@ class LiveTranscriber:
         # Audio preprocessing pipeline
         audio_data = self._preprocess_audio(audio_data)
 
-        self.transcription_pool.submit(self._transcribe_segment, audio_data)
+        self._submit_transcription(audio_data)
 
     def _preprocess_audio(self, audio):
         """Apply high-pass filter and peak normalization for cleaner transcription."""
@@ -738,7 +776,7 @@ class LiveTranscriber:
         print(f"  VAD threshold: {VAD_THRESHOLD}")
         print(f"  Silence trigger: {SILENCE_AFTER_SPEECH}s")
         print(f"  Max speech segment: {MAX_SPEECH_DURATION}s")
-        print(f"  Speaker diarization: {'ON' if DIARIZATION_AVAILABLE else 'OFF'}")
+        print(f"  Speaker diarization: {'ON' if self.speaker_tracker.enabled else 'OFF'}")
         print(f"  Display mode: {self.display.__class__.__name__}")
         print(f"  Live summary: {'ON' if self.summarizer else 'OFF'}")
         if self.translator:
@@ -823,6 +861,8 @@ def main():
                         help="Display mode: columns (side-by-side) or chat (bubble UI)")
     parser.add_argument("--summary", choices=["on", "off"], default=None,
                         help="Enable live rolling summary via local LLM")
+    parser.add_argument("--diarize", choices=["on", "off"], default="off",
+                        help="Speaker diarization (default: off)")
     args = parser.parse_args()
 
     print("\n\033[1mLive Transcribe - System Audio\033[0m\n")
@@ -1000,6 +1040,7 @@ def main():
         device_idx, translator=translator,
         translate_langs=translate_langs, target_lang=target_lang,
         model_repo=model_repo, display_mode=display_mode, summarizer=summarizer,
+        diarize=(args.diarize == "on"),
     )
 
     # Share the GPU lock with Qwen so Whisper and Qwen don't collide on Metal
