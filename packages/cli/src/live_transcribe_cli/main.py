@@ -186,6 +186,43 @@ def _build_translator(choice: str, target_lang: str):
     return GoogleTranslator(target_lang=target_lang)
 
 
+def _print_startup_banner(
+    *,
+    device_idx: int,
+    model_repo: str,
+    diarize: bool,
+    display_mode: str,
+    enable_summary: bool,
+    translator,
+    translate_langs: set[str],
+    target_lang: str,
+) -> None:
+    """Summarize the chosen configuration before the engine goes live."""
+    dev_name = sd.query_devices(device_idx)["name"]
+    print("=" * 60)
+    print("  LIVE TRANSCRIPTION")
+    print("=" * 60)
+    print(f"  Audio device:       {dev_name}")
+    print(f"  Whisper model:      {model_repo}")
+    print(f"  Speaker diarization:{' ON' if diarize else ' OFF'}")
+    print(f"  Display mode:       {display_mode}")
+    print(f"  Live summary:       {'ON' if enable_summary else 'OFF'}")
+    if translator is not None:
+        from_list = ", ".join(
+            f"{LANG_NAMES.get(l, l)} ({l})" for l in sorted(translate_langs)
+        ) or "(none)"
+        to_name = f"{LANG_NAMES.get(target_lang, target_lang)} ({target_lang})"
+        print(f"  Translation:        ON")
+        print(f"  Translate from:     {from_list}")
+        print(f"  Translate to:       {to_name}")
+    else:
+        print(f"  Translation:        OFF")
+    print("=" * 60)
+    print("  Press Ctrl+C to stop and save transcript")
+    print("=" * 60)
+    print("\nListening...\n")
+
+
 def _resolve_transcript_dir() -> str:
     """Return the transcripts/ directory at the repo root.
 
@@ -256,6 +293,17 @@ def main() -> None:
             diarize=(args.diarize == "on"),
         ),
         listener=display,
+    )
+
+    _print_startup_banner(
+        device_idx=device_idx,
+        model_repo=model_repo,
+        diarize=args.diarize == "on",
+        display_mode=display_mode,
+        enable_summary=enable_summary,
+        translator=translator,
+        translate_langs=translate_langs,
+        target_lang=target_lang,
     )
 
     stream = open_stream(device_idx, on_chunk=engine.push_audio)
