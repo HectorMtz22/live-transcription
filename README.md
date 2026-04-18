@@ -22,7 +22,7 @@ brew install --cask blackhole-2ch
 # reboot, then in Audio MIDI Setup create a Multi-Output Device combining
 # your speakers + BlackHole 2ch, and set it as the system output.
 
-uv sync
+just sync             # (== uv sync --all-packages; plain `uv sync` leaves the workspace empty)
 cp .env.example .env   # only if using the DeepL translator
 ```
 

@@ -4,3 +4,5 @@ peft
 torch
 transformers
 sentencepiece
+pandas
+datacollective
