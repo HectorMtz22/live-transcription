@@ -76,7 +76,6 @@ class TranscriptionEngine:
         self._summarizer: Optional[SummarizerProcess] = None
 
         self._gpu_lock = threading.Lock()
-        self._print_lock = threading.Lock()  # kept for parity with old code paths
 
         self._transcription_pool: Optional[ThreadPoolExecutor] = None
         self._translation_pool: Optional[ThreadPoolExecutor] = None
@@ -91,6 +90,7 @@ class TranscriptionEngine:
         self._pending_lock = threading.Lock()
 
         self._duplicate_filter = DuplicateFilter(maxlen=5)
+        # Protected by the single transcription-worker invariant (transcription_pool has max_workers=1).
         self._detected_lang: Optional[str] = None
         self._hp_sos = make_highpass_sos()
 
@@ -416,6 +416,7 @@ class TranscriptionEngine:
                 old_translation = entry["translation"]
                 entry["translation"] = new_translation
 
+                # Safe without locking: transcription_pool (1 worker) and translation_pool (1 worker for Qwen) serialize writers.
                 for j, (orig, trans) in enumerate(self._recent_context):
                     if orig == entry["text"] and trans == old_translation:
                         self._recent_context[j] = (orig, new_translation)

@@ -23,31 +23,30 @@ import os
 
 os.environ["PYTHONWARNINGS"] = "ignore::UserWarning:multiprocessing.resource_tracker"
 
-import re
 import sys
 import signal
 import threading
 import time
-from collections import Counter, deque
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-import numpy as np
-from scipy.signal import butter, sosfilt
 import sounddevice as sd
-import mlx_whisper
-import torch
 
 from display_columns import ColumnsDisplay
 from display_chat import ChatDisplay
-from live_transcribe_core.speaker import SpeakerTracker
-from live_transcribe_core.summarizer import SummarizerProcess
+from live_transcribe_core import (
+    EngineConfig,
+    EngineListener,
+    SegmentEvent,
+    StatusEvent,
+    SummaryEvent,
+    TranscriptionEngine,
+    TranslationEvent,
+)
 from live_transcribe_core.translators import (
     DeepLTranslator,
     GoogleTranslator as Translator,
     NLLBTranslator,
     QwenTranslator,
-    set_gpu_lock,
 )
 
 # ─── Configuration ───────────────────────────────────────────────────────────
@@ -56,49 +55,11 @@ SAMPLE_RATE = 16000          # Whisper expects 16kHz
 WHISPER_MODEL = "mlx-community/whisper-medium-mlx-q4"  # Q4 quantized medium; fast enough for real-time, decent multilingual quality
 WHISPER_MODEL_TURBO = "mlx-community/whisper-large-v3-turbo"  # Distilled: same encoder, 4 decoder layers (vs 32); higher quality, slower
 WHISPER_MODEL_FULL = "mlx-community/whisper-large-v3-mlx-4bit"  # Q4 quantized full model; 32 decoder layers, slowest but max accuracy
-SUPPORTED_LANGUAGES = ["ko", "en", "es"]  # Korean, English, Spanish only
 LANG_NAMES = {"ko": "Korean", "en": "English", "es": "Spanish"}
-
-# ─── VAD Configuration ──────────────────────────────────────────────────────
-
-VAD_THRESHOLD = 0.3          # Speech probability threshold (lower = more sensitive)
-MIN_SPEECH_DURATION = 0.3    # Ignore speech segments shorter than this (seconds)
-MAX_SPEECH_DURATION = 5.0    # Force transcription after this much continuous speech (seconds)
-SILENCE_AFTER_SPEECH = 0.5   # Pause duration to trigger end-of-speech (seconds)
-VAD_FRAME_SAMPLES = 512      # Silero VAD frame size (512 samples = 32ms at 16kHz)
-ENERGY_THRESHOLD = 0.002     # Minimum RMS energy to consider as real speech (not background noise)
-SPEECH_PAD_SAMPLES = int(SAMPLE_RATE * 0.15)  # 150ms padding before/after speech for cleaner word boundaries
-
-# ─── Whisper Prompt Hints ────────────────────────────────────────────────────
-# Initial prompts per language reduce hallucinations and guide punctuation style
-INITIAL_PROMPTS = {
-    "ko": "안녕하세요. 네, 알겠습니다. 그래서 이제 어떻게 할까요? 아, 그렇구나. 잠깐만요, 다시 한번 말씀해 주세요. 좋습니다, 진행하겠습니다.",
-    "en": "Hello. Yes, I understand. Thank you.",
-    "es": "Hola. Sí, entiendo. Gracias.",
-}
-
-# Common Whisper hallucination phrases (produced from silence/noise)
-HALLUCINATION_PHRASES = {
-    "thank you", "thanks for watching", "thanks for listening",
-    "subscribe", "like and subscribe", "see you next time",
-    "bye", "goodbye", "thank you for watching",
-    "please subscribe", "the end", "you",
-    "시청해 주셔서 감사합니다", "구독", "좋아요",
-    "감사합니다", "고마워요",
-    "다음 시간에 만나요", "구독과 좋아요",
-    "좋아요와 구독", "채널에 가입", "알림 설정",
-    "영상 시청해 주셔서 감사합니다",
-    "오늘도 시청해 주셔서 감사합니다",
-    "끝까지 시청해 주셔서 감사합니다",
-    "SBS 뉴스", "YTN 뉴스", "JTBC 뉴스", "채널A 뉴스",
-    "gracias por ver", "suscríbete",
-    "MBC 뉴스", "KBS 뉴스",
-}
 
 # ─── Global State ────────────────────────────────────────────────────────────
 
 running = True
-lock = threading.Lock()
 
 
 def find_blackhole_device():
@@ -128,620 +89,131 @@ def list_input_devices(default_idx=None):
     print()
 
 
-def load_vad_model():
-    """Load Silero VAD model from PyTorch Hub."""
-    print("Loading Silero VAD model...")
-    model, utils = torch.hub.load(
-        repo_or_dir="snakers4/silero-vad",
-        model="silero_vad",
-        trust_repo=True,
-    )
-    print("VAD model ready.")
-    return model
+class _DisplayAdapter:
+    """Temporary bridge: forwards EngineListener events to the old print_* display API.
 
+    Removed in Task 5 when ColumnsDisplay and ChatDisplay implement
+    EngineListener directly.
+    """
 
-class LiveTranscriber:
-    """Main live transcription engine with VAD-driven segmentation."""
+    def __init__(self, display, has_translator: bool):
+        self._display = display
+        self._has_translator = has_translator
+        self._entry_lookup = {}  # segment_id -> (speaker, text, lang, timestamp)
+        self._last_speaker = None
+        self._print_lock = threading.Lock()
 
-    def __init__(self, device_index, translator=None, translate_langs=None,
-                 target_lang="en", model_repo=WHISPER_MODEL, display_mode="columns",
-                 summarizer=None, diarize=False):
-        self.device_index = device_index
-        self.speaker_tracker = SpeakerTracker(enabled=diarize)
-        self.translator = translator
-        self.translate_langs = translate_langs or set()
-        self.target_lang = target_lang
-        self.summarizer = summarizer
-        self.last_speaker = None
-        self.transcript_lines = []
-        self.recent_context = deque(maxlen=10)  # Rolling buffer: (original, translation) pairs
-        self.model_repo = model_repo
-        self.print_lock = threading.Lock()
-        self.gpu_lock = threading.Lock()  # Serialize Metal/MLX operations (Whisper + Qwen)
-        self.transcription_pool = ThreadPoolExecutor(max_workers=1)
-        # Backlog tracking for adaptive VAD (see _adaptive_thresholds)
-        self._pending_count = 0
-        self._pending_lock = threading.Lock()
-        # Qwen serializes on GPU anyway, so 1 worker suffices; others can parallelize
-        translation_workers = 1 if isinstance(translator, QwenTranslator) else 4
-        self.translation_pool = ThreadPoolExecutor(max_workers=translation_workers) if translator else None
-
-        # Display mode
-        if display_mode == "chat":
-            self.display = ChatDisplay()
-        else:
-            self.display = ColumnsDisplay()
-
-        # Audio preprocessing: high-pass filter at 80Hz to remove rumble/hum
-        self._hp_sos = butter(5, 80, btype='high', fs=SAMPLE_RATE, output='sos')
-
-        # Duplicate suppression: track recent transcriptions
-        self._recent_texts = deque(maxlen=5)
-
-        # Track detected language for initial_prompt hinting
-        self._detected_lang = None
-
-        # VAD state
-        self.vad_model = load_vad_model()
-        self.audio_queue = deque()  # Raw audio frames waiting for VAD processing
-        self.speech_buffer = []     # Accumulated audio during speech
-        self.is_speaking = False
-        self.silence_start_time = 0.0
-        self.vad_lock = threading.Lock()
-
-        print(f"Loading Whisper model '{model_repo}' (GPU-accelerated)...")
-        # Warm up the model by running a dummy transcription
-        dummy = np.zeros(SAMPLE_RATE, dtype=np.float32)
-        mlx_whisper.transcribe(dummy, path_or_hf_repo=model_repo, language="en", temperature=0.0)
-        print("Whisper model ready.\n")
-
-    def audio_callback(self, indata, frames, time_info, status):
-        """Called for each audio block from sounddevice."""
-        if status:
-            pass  # Ignore overflow warnings silently
-        audio = indata[:, 0].copy()  # Mono
-        with self.vad_lock:
-            self.audio_queue.append(audio)
-
-    def process_audio(self):
-        """Process audio through VAD and trigger transcription on speech boundaries."""
-        global running
-
-        try:
-            while running:
-                # Grab any queued audio
-                with self.vad_lock:
-                    if not self.audio_queue:
-                        time.sleep(0.01)
-                        continue
-                    chunks = list(self.audio_queue)
-                    self.audio_queue.clear()
-
-                # Concatenate all queued audio into one array
-                raw_audio = np.concatenate(chunks)
-
-                # Process in VAD_FRAME_SAMPLES-sized frames
-                offset = 0
-                while offset + VAD_FRAME_SAMPLES <= len(raw_audio):
-                    frame = raw_audio[offset:offset + VAD_FRAME_SAMPLES]
-                    offset += VAD_FRAME_SAMPLES
-
-                    # Run VAD on this frame
-                    frame_tensor = torch.from_numpy(frame).float()
-                    speech_prob = self.vad_model(frame_tensor, SAMPLE_RATE).item()
-
-                    now = time.monotonic()
-
-                    silence_cap, max_speech_cap = self._adaptive_thresholds()
-
-                    if speech_prob >= VAD_THRESHOLD:
-                        # Speech detected
-                        if not self.is_speaking:
-                            self.is_speaking = True
-                        self.silence_start_time = 0.0
-                        self.speech_buffer.append(frame)
-
-                        # Force transcription if speech is too long (measured from
-                        # actual samples, not wall clock — wall clock drifts when
-                        # the VAD thread is catching up on queued audio).
-                        speech_samples = sum(len(f) for f in self.speech_buffer)
-                        speech_duration = speech_samples / SAMPLE_RATE
-                        if speech_duration >= max_speech_cap:
-                            self._flush_speech_buffer()
-
-                    else:
-                        # Silence / non-speech
-                        if self.is_speaking:
-                            # Still accumulate audio during short pauses
-                            self.speech_buffer.append(frame)
-
-                            if self.silence_start_time == 0.0:
-                                self.silence_start_time = now
-                            elif now - self.silence_start_time >= silence_cap:
-                                # Enough silence after speech — trigger transcription
-                                self._flush_speech_buffer()
-
-                # Keep any leftover samples for the next iteration
-                remainder = len(raw_audio) - offset
-                if remainder > 0:
-                    with self.vad_lock:
-                        self.audio_queue.appendleft(raw_audio[offset:])
-        finally:
-            # On shutdown, transcribe whatever is still buffered so the last
-            # utterance isn't lost. _flush_speech_buffer submits to the pool;
-            # transcription_pool.shutdown(wait=True) in start()'s finally
-            # blocks until that submission completes.
-            if self.speech_buffer:
-                self._flush_speech_buffer()
-
-    def _adaptive_thresholds(self):
-        """Return (silence_after_speech, max_speech_duration) scaled by current backlog.
-
-        Grows linearly with pending transcriptions so Whisper gets fewer, bigger
-        chunks when it's falling behind. Capped to prevent runaway latency.
-        """
-        p = self._pending_count  # int read is atomic in CPython; no lock needed
-        silence = min(SILENCE_AFTER_SPEECH + 0.5 * p, 2.0)
-        max_speech = min(MAX_SPEECH_DURATION + 3.0 * p, 15.0)
-        return silence, max_speech
-
-    def _submit_transcription(self, audio_data):
-        """Submit an audio segment for transcription and track it in the backlog counter."""
-        with self._pending_lock:
-            self._pending_count += 1
-        fut = self.transcription_pool.submit(self._transcribe_segment, audio_data)
-        fut.add_done_callback(lambda _f: self._dec_pending())
-
-    def _dec_pending(self):
-        """Called from the worker thread after each transcription completes (success or failure)."""
-        with self._pending_lock:
-            self._pending_count = max(0, self._pending_count - 1)
-
-    def _flush_speech_buffer(self):
-        """Send accumulated speech buffer to transcription and reset VAD state."""
-        if not self.speech_buffer:
-            self.is_speaking = False
-            self.silence_start_time = 0.0
-            return
-
-        audio_data = np.concatenate(self.speech_buffer).astype(np.float32)
-
-        # Reset VAD state
-        self.speech_buffer = []
-        self.is_speaking = False
-        self.silence_start_time = 0.0
-        self.vad_model.reset_states()
-
-        # Check minimum speech duration
-        duration = len(audio_data) / SAMPLE_RATE
-        if duration < MIN_SPEECH_DURATION:
-            return
-
-        # Check energy level — reject quiet noise that slipped past VAD
-        rms = np.sqrt(np.mean(audio_data ** 2))
-        if rms < ENERGY_THRESHOLD:
-            return
-
-        # Audio preprocessing pipeline
-        audio_data = self._preprocess_audio(audio_data)
-
-        self._submit_transcription(audio_data)
-
-    def _preprocess_audio(self, audio):
-        """Apply high-pass filter and peak normalization for cleaner transcription."""
-        # High-pass filter: remove low-frequency rumble/hum (< 80Hz)
-        audio = sosfilt(self._hp_sos, audio).astype(np.float32)
-
-        # Add small silence padding at boundaries so Whisper doesn't clip words
-        pad = np.zeros(SPEECH_PAD_SAMPLES, dtype=np.float32)
-        audio = np.concatenate([pad, audio, pad])
-
-        # Peak normalization to -1dB to maximize SNR without clipping
-        peak = np.max(np.abs(audio))
-        if peak > 0:
-            audio = audio * (0.9 / peak)
-
-        return audio
-
-    @staticmethod
-    def _is_hallucination(text):
-        """Detect Whisper hallucination patterns (repetitive tokens or known phantom phrases)."""
-        stripped = text.strip()
-        if not stripped:
-            return True
-
-        # Check against known hallucination phrases (Whisper commonly produces these from silence)
-        normalized = stripped.lower().strip(" .!?,。？！")
-        if normalized in HALLUCINATION_PHRASES:
-            return True
-
-        # Korean-specific: detect repeated syllable/character patterns (Korean has fewer spaces)
-        no_spaces = stripped.replace(" ", "")
-        if len(no_spaces) >= 4:
-            # Check for single character repetition (e.g. "아아아아아")
-            unique_chars = set(no_spaces)
-            if len(unique_chars) <= 2:
-                return True
-            # Check for repeating character n-grams (e.g. "하하하하" or "네네네네")
-            for n in range(1, min(len(no_spaces) // 3 + 1, 6)):
-                pattern = no_spaces[:n]
-                repetitions = no_spaces.count(pattern)
-                if repetitions >= 3 and (repetitions * n) / len(no_spaces) > 0.6:
-                    return True
-
-        # Split into words/tokens
-        tokens = stripped.split()
-        if len(tokens) < 3:
-            return False
-        # Check if most tokens are the same (repetitive hallucination)
-        unique_tokens = set(tokens)
-        if len(unique_tokens) <= 2 and len(tokens) >= 4:
-            return True
-        # Check if any single token dominates (>70% of all tokens)
-        counts = Counter(tokens)
-        most_common_count = counts.most_common(1)[0][1]
-        if most_common_count / len(tokens) > 0.7 and len(tokens) >= 4:
-            return True
-        # Detect repeating n-gram phrases (e.g. "A B C A B C A B C")
-        for n in range(2, min(len(tokens) // 2 + 1, 8)):
-            ngrams = [tuple(tokens[i:i+n]) for i in range(len(tokens) - n + 1)]
-            ngram_counts = Counter(ngrams)
-            most_common_ngram, mc_count = ngram_counts.most_common(1)[0]
-            if mc_count >= 3 and (mc_count * len(most_common_ngram)) / len(tokens) > 0.5:
-                return True
-        return False
-
-    def _is_duplicate(self, text):
-        """Check if text is a near-duplicate of a recent transcription."""
-        normalized = text.strip().lower()
-        for recent in self._recent_texts:
-            if not recent:
-                continue
-            # Exact match
-            if normalized == recent:
-                return True
-            # Substring containment (one contains 80%+ of the other)
-            shorter, longer = sorted([normalized, recent], key=len)
-            if len(shorter) > 5 and shorter in longer:
-                return True
-        return False
-
-    @staticmethod
-    def _chunk_for_translation(text, max_chunk_len=120):
-        """Split text into sentence-level chunks for better translation quality.
-
-        Splits on sentence-ending punctuation first (. ! ? and CJK equivalents),
-        then falls back to clause boundaries (, ; :) if chunks are still too long.
-        """
-        # Split on sentence boundaries (keep the delimiter attached)
-        sentence_pattern = r'(?<=[.!?。？！\n])\s*'
-        sentences = re.split(sentence_pattern, text)
-        sentences = [s.strip() for s in sentences if s.strip()]
-
-        # If no sentence boundaries found, try clause boundaries
-        if len(sentences) == 1 and len(sentences[0]) > max_chunk_len:
-            clause_pattern = r'(?<=[,;:，；、])\s*'
-            sentences = re.split(clause_pattern, text)
-            sentences = [s.strip() for s in sentences if s.strip()]
-
-        # Merge very short adjacent chunks to avoid translating fragments
-        merged = []
-        buf = ""
-        for s in sentences:
-            if buf and len(buf) + len(s) + 1 <= max_chunk_len:
-                buf += " " + s
-            else:
-                if buf:
-                    merged.append(buf)
-                buf = s
-        if buf:
-            merged.append(buf)
-
-        return merged if merged else [text]
-
-    def _retranslate_recent(self, source_lang):
-        """Re-translate recent entries with updated context (Qwen only).
-
-        If context causes a previous translation to change, update the display.
-        """
-        # Gather candidates: recent translated entries excluding the last one (just added)
-        candidates = []
-        for i, entry in enumerate(self.transcript_lines):
-            if entry.get("translation") and entry["language"] == source_lang:
-                candidates.append((i, entry))
-        # Only re-translate the last 3 entries before the current one
-        candidates = candidates[-4:-1]
-        if not candidates:
-            return
-
-        context = list(self.recent_context)
-
-        for idx, entry in candidates:
-            try:
-                new_translation = self.translator.translate(
-                    entry["text"], entry["language"], context=context
+    def on_segment(self, event):
+        with self._print_lock:
+            if event.speaker != self._last_speaker:
+                self._display.print_segment_header(
+                    event.speaker, event.timestamp,
+                    has_translator=self._has_translator,
+                    entry_key=event.id,
                 )
-            except Exception:
-                continue
-
-            if new_translation and new_translation != entry["translation"]:
-                old_translation = entry["translation"]
-                entry["translation"] = new_translation
-
-                # Update recent_context deque
-                for j, (orig, trans) in enumerate(self.recent_context):
-                    if orig == entry["text"] and trans == old_translation:
-                        self.recent_context[j] = (orig, new_translation)
-                        break
-
-                with self.print_lock:
-                    self.display.update_translation(
-                        entry.get("_display_key"), entry["speaker"],
-                        entry["text"], new_translation,
-                        entry["language"], timestamp=entry["time"],
-                    )
-
-    def _transcribe_segment(self, audio_data):
-        """Transcribe an audio segment with single-pass Whisper."""
-        try:
-            # Use language-specific initial prompt to guide punctuation and reduce hallucinations
-            initial_prompt = INITIAL_PROMPTS.get(self._detected_lang)
-
-            with self.gpu_lock:
-                result = mlx_whisper.transcribe(
-                    audio_data,
-                    path_or_hf_repo=self.model_repo,
-                    initial_prompt=initial_prompt,
-                    temperature=(0.0, 0.2, 0.4),
-                    condition_on_previous_text=False,
-                    compression_ratio_threshold=1.8,
-                    logprob_threshold=-1.0,
-                    no_speech_threshold=0.6,
-                )
-
-            lang = result.get("language", "??")
-            if lang not in SUPPORTED_LANGUAGES:
-                return
-
-            # Update detected language for next segment's initial_prompt
-            self._detected_lang = lang
-
-            # Collect all valid segments and group by speaker
-            groups = []  # list of (speaker, [text, ...])
-            for segment in result["segments"]:
-                text = segment["text"].strip()
-                if not text or len(text) < 2:
-                    continue
-
-                avg_logprob = segment.get("avg_logprob", 0)
-                no_speech_prob = segment.get("no_speech_prob", 0)
-                if avg_logprob < -1.0 or no_speech_prob > 0.6:
-                    continue
-
-                if self._is_hallucination(text):
-                    continue
-
-                start_sample = int(segment["start"] * SAMPLE_RATE)
-                end_sample = min(int(segment["end"] * SAMPLE_RATE), len(audio_data))
-                segment_audio = audio_data[start_sample:end_sample]
-                speaker = self.speaker_tracker.identify_speaker(segment_audio)
-
-                # Append to current group or start a new one
-                if groups and groups[-1][0] == speaker:
-                    groups[-1][1].append(text)
-                else:
-                    groups.append((speaker, [text]))
-
-            # Display one message per speaker group
-            for speaker, texts in groups:
-                full_text = " ".join(texts)
-
-                # Skip near-duplicate transcriptions (Whisper sometimes repeats itself)
-                if self._is_duplicate(full_text):
-                    continue
-                self._recent_texts.append(full_text.strip().lower())
-
-                timestamp = datetime.now().strftime("%H:%M:%S")
-
-                entry = {
-                    "time": timestamp,
-                    "speaker": speaker,
-                    "text": full_text,
-                    "language": lang,
-                    "translation": None,
-                }
-                entry_key = id(entry)
-                entry["_display_key"] = entry_key
-                self.transcript_lines.append(entry)
-
-                with self.print_lock:
-                    self.display.print_segment_header(
-                        speaker, timestamp, has_translator=bool(self.translator),
-                        entry_key=entry_key,
-                    )
-                self.last_speaker = speaker
-
-                if self.summarizer:
-                    self.summarizer.add_line(speaker, full_text, lang)
-
-                if self.translator and lang in self.translate_langs:
-                    context = list(self.recent_context) or None
-
-                    if isinstance(self.translator, QwenTranslator):
-                        # Qwen: translate full text as a whole, no chunking
-                        full_translation = self.translator.translate(
-                            full_text, entry["language"], context=context
-                        )
-                    else:
-                        chunks = self._chunk_for_translation(full_text)
-
-                        # Translate all chunks, then display as one message
-                        futures = []
-                        for i, chunk_text in enumerate(chunks):
-                            chunk_ctx = context if i == 0 else (context or []) + [(c, None) for c in chunks[:i]]
-                            futures.append(self.translation_pool.submit(
-                                self.translator.translate, chunk_text,
-                                entry["language"], context=chunk_ctx
-                            ))
-
-                        # Collect all translations
-                        all_translations = []
-                        for future in futures:
-                            try:
-                                t = future.result(timeout=10.0)
-                                if t:
-                                    all_translations.append(t)
-                            except Exception:
-                                pass
-
-                        full_translation = " ".join(all_translations) if all_translations else None
-
-                    entry["translation"] = full_translation
-
-                    with self.print_lock:
-                        self.display.print_translated(
-                            speaker, full_text, full_translation, lang,
-                            timestamp=timestamp, entry_key=entry_key,
-                        )
-
-                    self.recent_context.append((full_text, full_translation))
-
-                    # Qwen: re-translate recent entries with updated context
-                    if isinstance(self.translator, QwenTranslator):
-                        self.translation_pool.submit(
-                            self._retranslate_recent, entry["language"]
-                        )
-                else:
-                    with self.print_lock:
-                        self.display.print_without_translation(
-                            speaker, full_text, lang, timestamp=timestamp,
-                            entry_key=entry_key,
-                        )
-                    self.recent_context.append((full_text, None))
-
-        except Exception as e:
-            print(f"\033[0;31m[Error] Transcription failed: {e}\033[0m")
-
-    def save_transcript(self):
-        """Save transcript to separate original and English translation files."""
-        if not self.transcript_lines:
-            return
-
-        transcript_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "transcripts")
-        os.makedirs(transcript_dir, exist_ok=True)
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        header_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-        # Save original transcript
-        original_path = os.path.join(transcript_dir, f"transcript_{timestamp}_original.txt")
-        with open(original_path, "w") as f:
-            f.write(f"Transcript (Original) - {header_time}\n")
-            f.write("=" * 60 + "\n\n")
-            current_speaker = None
-            for line in self.transcript_lines:
-                if line["speaker"] != current_speaker:
-                    current_speaker = line["speaker"]
-                    f.write(f"\n[{line['time']}] {current_speaker}:\n")
-                f.write(f"  {line['text']}\n")
-
-        # Save translated transcript
-        has_translations = any(line.get("translation") for line in self.transcript_lines)
-        if has_translations:
-            target_name = LANG_NAMES.get(self.target_lang, self.target_lang).lower()
-            translated_path = os.path.join(transcript_dir, f"transcript_{timestamp}_{target_name}.txt")
-            target_label = LANG_NAMES.get(self.target_lang, self.target_lang)
-            with open(translated_path, "w") as f:
-                f.write(f"Transcript ({target_label}) - {header_time}\n")
-                f.write("=" * 60 + "\n\n")
-                current_speaker = None
-                for line in self.transcript_lines:
-                    if line["speaker"] != current_speaker:
-                        current_speaker = line["speaker"]
-                        f.write(f"\n[{line['time']}] {current_speaker}:\n")
-                    f.write(f"  {line.get('translation') or line['text']}\n")
-            print(f"\n\033[1;32mTranscripts saved to:\n  {original_path}\n  {translated_path}\033[0m")
-        else:
-            print(f"\n\033[1;32mTranscript saved to: {original_path}\033[0m")
-
-    def start(self):
-        """Start live transcription."""
-        global running
-
-        print("=" * 60)
-        print("  LIVE TRANSCRIPTION WITH SPEAKER DIARIZATION")
-        print("=" * 60)
-        print(f"  Audio device: {sd.query_devices(self.device_index)['name']}")
-        print(f"  Whisper model: {WHISPER_MODEL}")
-        print(f"  VAD threshold: {VAD_THRESHOLD}")
-        print(f"  Silence trigger: {SILENCE_AFTER_SPEECH}s")
-        print(f"  Max speech segment: {MAX_SPEECH_DURATION}s")
-        print(f"  Speaker diarization: {'ON' if self.speaker_tracker.enabled else 'OFF'}")
-        print(f"  Display mode: {self.display.__class__.__name__}")
-        print(f"  Live summary: {'ON' if self.summarizer else 'OFF'}")
-        if self.translator:
-            from_list = ", ".join(
-                f"{LANG_NAMES.get(l, l)} ({l})" for l in sorted(self.translate_langs)
+                self._last_speaker = event.speaker
+            self._entry_lookup[event.id] = (
+                event.speaker, event.text, event.language, event.timestamp,
             )
-            to_name = f"{LANG_NAMES.get(self.target_lang, self.target_lang)} ({self.target_lang})"
-            print(f"  Translation: ON")
-            print(f"  Translate from: {from_list}")
-            print(f"  Translate to:   {to_name}")
-        else:
-            print(f"  Translation: OFF")
-        print("=" * 60)
-        print("  Press Ctrl+C to stop and save transcript")
-        print("=" * 60)
-        print("\nListening...\n")
+            if not self._has_translator:
+                self._display.print_without_translation(
+                    event.speaker, event.text, event.language,
+                    timestamp=event.timestamp, entry_key=event.id,
+                )
 
-        # Start audio stream
-        stream = sd.InputStream(
-            device=self.device_index,
-            samplerate=SAMPLE_RATE,
-            channels=1,
-            dtype="float32",
-            blocksize=int(SAMPLE_RATE * 0.1),  # 100ms blocks (smaller for lower latency)
-            callback=self.audio_callback,
-        )
+    def on_translation(self, event):
+        meta = self._entry_lookup.get(event.segment_id)
+        if meta is None:
+            return
+        speaker, text, lang, timestamp = meta
+        with self._print_lock:
+            if event.is_update:
+                self._display.update_translation(
+                    event.segment_id, speaker, text, event.text,
+                    lang, timestamp=timestamp,
+                )
+            else:
+                self._display.print_translated(
+                    speaker, text, event.text or None, lang,
+                    timestamp=timestamp, entry_key=event.segment_id,
+                )
 
-        # Start processing thread
-        process_thread = threading.Thread(target=self.process_audio, daemon=True)
+    def on_summary(self, event):
+        if not event.text:
+            return
+        print(f"\n\033[1;35m{'─' * 40}")
+        print(f"  {'FINAL SUMMARY' if event.is_final else 'SUMMARY'}")
+        print(f"{'─' * 40}\033[0m")
+        print(f"\033[0;35m  {event.text}\033[0m")
+        print(f"\033[1;35m{'─' * 40}\033[0m\n")
 
-        def signal_handler(sig, frame):
-            global running
-            running = False
-            print("\n\nStopping...")
+    def on_status(self, event):
+        if event.state == "error" and event.message:
+            print(f"\033[0;31m[Error] {event.message}\033[0m")
 
-        signal.signal(signal.SIGINT, signal_handler)
 
-        try:
-            stream.start()
-            process_thread.start()
-            self.display.start()
-            if self.summarizer:
-                self.summarizer.start()
+def _run_with_audio(engine, display, device_idx, target_lang):
+    """Drive the engine with a sounddevice InputStream.
 
-            while running:
-                time.sleep(0.1)
+    Temporary — Task 5 moves this into live_transcribe_cli.audio.
+    """
+    global running
+    running = True
 
-        finally:
-            self.display.stop()
-            stream.stop()
-            stream.close()
-            running = False
-            process_thread.join(timeout=5)
-            self.transcription_pool.shutdown(wait=True, cancel_futures=False)
-            if self.translation_pool:
-                self.translation_pool.shutdown(wait=True, cancel_futures=False)
-            if self.summarizer:
-                final_summary = self.summarizer.stop()
-                if final_summary:
-                    print(f"\n{'=' * 60}")
-                    print("  FINAL SUMMARY")
-                    print(f"{'=' * 60}")
-                    print(f"  {final_summary}")
-                    print(f"{'=' * 60}")
-            self.save_transcript()
-            print("Done.")
+    stream = sd.InputStream(
+        device=device_idx,
+        samplerate=SAMPLE_RATE,
+        channels=1,
+        dtype="float32",
+        blocksize=int(SAMPLE_RATE * 0.1),
+        callback=lambda indata, frames, time_info, status: engine.push_audio(indata[:, 0].copy()),
+    )
+
+    def signal_handler(sig, frame):
+        global running
+        running = False
+        print("\n\nStopping...")
+
+    signal.signal(signal.SIGINT, signal_handler)
+
+    try:
+        engine.start()
+        stream.start()
+        display.start()
+        while running:
+            time.sleep(0.1)
+    finally:
+        display.stop()
+        stream.stop()
+        stream.close()
+        engine.stop()
+        _save_transcript_inline(engine.get_transcript(), target_lang)
+        print("Done.")
+
+
+def _save_transcript_inline(segments, target_lang):
+    """Temporary — Task 5 moves this into live_transcribe_cli.transcript.save_transcript."""
+    if not segments:
+        return
+    transcript_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    header_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    original_path = os.path.join(transcript_dir, f"transcript_{timestamp}_original.txt")
+    with open(original_path, "w") as f:
+        f.write(f"Transcript (Original) - {header_time}\n")
+        f.write("=" * 60 + "\n\n")
+        current_speaker = None
+        for seg in segments:
+            if seg.speaker != current_speaker:
+                current_speaker = seg.speaker
+                f.write(f"\n[{seg.timestamp}] {current_speaker}:\n")
+            f.write(f"  {seg.text}\n")
+    print(f"\n\033[1;32mTranscript saved to: {original_path}\033[0m")
+    # Translations: not tracked in the SegmentEvent snapshot. Accepted one-commit
+    # regression — Task 5's save_transcript captures translations from the display
+    # listener state and restores the translated file.
 
 
 def main():
@@ -904,7 +376,6 @@ def main():
     print(f"Using display: {display_mode}")
 
     # Select summary mode
-    summarizer = None
     if args.summary is not None:
         enable_summary = args.summary == "on"
     else:
@@ -919,33 +390,34 @@ def main():
         except (ValueError, EOFError):
             enable_summary = False
 
-    if enable_summary:
-        def on_summary(text):
-            print(f"\n\033[1;35m{'─' * 40}")
-            print(f"  SUMMARY")
-            print(f"{'─' * 40}\033[0m")
-            print(f"\033[0;35m  {text}\033[0m")
-            print(f"\033[1;35m{'─' * 40}\033[0m\n")
-
-        summarizer = SummarizerProcess(target_lang=target_lang, on_summary=on_summary)
-
     # Select Whisper model
     model_map = {"medium": WHISPER_MODEL, "turbo": WHISPER_MODEL_TURBO, "full": WHISPER_MODEL_FULL}
     model_repo = model_map[args.model]
     print(f"Using Whisper model: {model_repo}")
 
-    # Start transcription
-    transcriber = LiveTranscriber(
-        device_idx, translator=translator,
-        translate_langs=translate_langs, target_lang=target_lang,
-        model_repo=model_repo, display_mode=display_mode, summarizer=summarizer,
-        diarize=(args.diarize == "on"),
+    # Build the display directly (no longer owned by LiveTranscriber)
+    if display_mode == "chat":
+        display = ChatDisplay()
+    else:
+        display = ColumnsDisplay()
+
+    listener = _DisplayAdapter(display, has_translator=translator is not None)
+
+    # Construct the engine. It handles GPU-lock sharing with Qwen internally
+    # (see engine.start() → translators.set_gpu_lock).
+    engine = TranscriptionEngine(
+        EngineConfig(
+            whisper_model=model_repo,
+            translator=translator,
+            translate_langs=translate_langs,
+            target_lang=target_lang,
+            enable_summary=enable_summary,
+            diarize=(args.diarize == "on"),
+        ),
+        listener=listener,
     )
 
-    # Share the GPU lock with Qwen so Whisper and Qwen don't collide on Metal
-    set_gpu_lock(translator, transcriber.gpu_lock)
-
-    transcriber.start()
+    _run_with_audio(engine, display, device_idx, target_lang)
 
 
 if __name__ == "__main__":
