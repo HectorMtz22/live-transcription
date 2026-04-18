@@ -1,4 +1,3 @@
-"""Deprecated entry point. Use `just run` or `live-transcribe` instead."""
 from live_transcribe_cli.main import main
 
 if __name__ == "__main__":

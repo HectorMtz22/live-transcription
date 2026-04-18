@@ -1,4 +1,9 @@
-"""Chat bubble display mode: messages appear as aligned chat bubbles per speaker."""
+"""Chat bubble display — subscribes to EngineListener events.
+
+Messages appear as aligned chat bubbles per speaker, with per-speaker color
+and alternating left/right alignment.
+"""
+from __future__ import annotations
 
 from rich.align import Align
 from rich.console import Console, Group
@@ -6,27 +11,30 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
+from live_transcribe_cli.displays.base import BaseDisplay
+from live_transcribe_core import SegmentEvent
+
 console = Console()
 
 SPEAKER_COLORS = ["cyan", "green", "magenta", "yellow", "blue"]
 
 
-class ChatDisplay:
+class ChatDisplay(BaseDisplay):
     """Chat-style layout with Rich Live for in-place translation updates."""
 
-    def __init__(self):
-        self._side_map = {}
+    def __init__(self, has_translator: bool):
+        super().__init__(has_translator=has_translator)
+        self._side_map: dict[str, str] = {}
         self._next_side = 0
-        self._color_map = {}
+        self._color_map: dict[str, str] = {}
         self._color_idx = 0
-        self._entries = []
-        self._entry_map = {}
+        self._entries: list = []
+        self._entry_map: dict[str, int] = {}
         self._live = None
         # Chat bubbles are taller, so fewer fit in the live area
         self._max_entries = max(3, (console.height - 5) // 5)
 
-    def start(self):
-        """Start the live display region."""
+    def start(self) -> None:
         self._live = Live(
             Group(*self._entries) if self._entries else Text(""),
             console=console,
@@ -35,72 +43,70 @@ class ChatDisplay:
         )
         self._live.start()
 
-    def stop(self):
-        """Stop the live display, preserving content on screen."""
+    def stop(self) -> None:
         if self._live:
             self._live.stop()
             self._live = None
 
+    # Render hooks ----------------------------------------------------------
+
+    def _render_segment_header_if_needed(
+        self, event: SegmentEvent, new_speaker: bool
+    ) -> None:
+        # No-op for chat mode — speaker info is shown in the bubble title.
+        return
+
+    def _render_segment_without_translation(self, event: SegmentEvent) -> None:
+        self._append(
+            self._render_bubble(
+                event.speaker, event.text, lang_tag=event.language,
+                timestamp=event.timestamp,
+            ),
+            entry_key=event.id,
+        )
+
+    def _render_translation(self, segment: SegmentEvent, translation: str) -> None:
+        t = f"→ {translation}" if translation else None
+        self._append(
+            self._render_bubble(
+                segment.speaker, segment.text, translation=t,
+                lang_tag=segment.language, timestamp=segment.timestamp,
+            ),
+            entry_key=segment.id,
+        )
+
+    def _render_translation_update(
+        self, segment: SegmentEvent, translation: str
+    ) -> None:
+        idx = self._entry_map.get(segment.id)
+        if idx is None:
+            return
+        t = f"→ {translation}" if translation else None
+        self._entries[idx] = self._render_bubble(
+            segment.speaker, segment.text, translation=t,
+            lang_tag=segment.language, timestamp=segment.timestamp, updated=True,
+        )
+        self._refresh()
+
+    # Internal --------------------------------------------------------------
+
     def _append(self, renderable, entry_key=None):
-        """Add a renderable to the live display."""
         if self._live is None:
             console.print(renderable)
             return
-
         self._entries.append(renderable)
         if entry_key is not None:
             self._entry_map[entry_key] = len(self._entries) - 1
-
         while len(self._entries) > self._max_entries:
             old = self._entries.pop(0)
             self._live.console.print(old)
             self._entry_map = {k: v - 1 for k, v in self._entry_map.items() if v > 0}
-
         self._refresh()
 
     def _refresh(self):
         if self._live and self._entries:
             self._live.update(Group(*self._entries))
             self._live.refresh()
-
-    def print_segment_header(self, speaker, timestamp, has_translator,
-                             entry_key=None):
-        """No-op for chat mode — speaker info is shown in the bubble title."""
-        pass
-
-    def print_translated(self, speaker, text, translation, lang_tag,
-                         timestamp=None, entry_key=None):
-        """Print a chat bubble with original text and translation."""
-        t = f"→ {translation}" if translation else None
-        self._append(
-            self._render_bubble(speaker, text, translation=t,
-                                lang_tag=lang_tag, timestamp=timestamp),
-            entry_key=entry_key,
-        )
-
-    def print_without_translation(self, speaker, text, lang_tag,
-                                  timestamp=None, entry_key=None):
-        """Print a chat bubble (no translation)."""
-        self._append(
-            self._render_bubble(speaker, text, lang_tag=lang_tag,
-                                timestamp=timestamp),
-            entry_key=entry_key,
-        )
-
-    def update_translation(self, entry_key, speaker, text, new_translation,
-                           lang_tag, timestamp=None):
-        """Replace a previously printed translation in-place."""
-        idx = self._entry_map.get(entry_key)
-        if idx is None:
-            return  # Entry already committed above live area
-
-        t = f"→ {new_translation}" if new_translation else None
-        self._entries[idx] = self._render_bubble(
-            speaker, text, translation=t, lang_tag=lang_tag,
-            timestamp=timestamp, updated=True)
-        self._refresh()
-
-    # ─── Internal helpers ────────────────────────────────────────────────────
 
     def _speaker_side(self, speaker):
         if speaker not in self._side_map:

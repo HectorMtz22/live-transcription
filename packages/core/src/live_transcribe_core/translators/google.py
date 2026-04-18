@@ -4,7 +4,7 @@ import time
 from collections import OrderedDict
 
 try:
-    from deep_translator import GoogleTranslator
+    from deep_translator import GoogleTranslator as _DeepGoogleTranslator
     TRANSLATION_AVAILABLE = True
 except ImportError:
     TRANSLATION_AVAILABLE = False
@@ -12,7 +12,7 @@ except ImportError:
 TRANSLATION_CACHE_SIZE = 256
 
 
-class Translator:
+class GoogleTranslator:
     """Translates text using Google Translate with caching and retry."""
 
     def __init__(self, target_lang="en"):
@@ -27,7 +27,7 @@ class Translator:
         """Get or create a cached GoogleTranslator for the given source language."""
         key = (source_lang, self.target_lang)
         if key not in self._translators:
-            self._translators[key] = GoogleTranslator(source=source_lang, target=self.target_lang)
+            self._translators[key] = _DeepGoogleTranslator(source=source_lang, target=self.target_lang)
         return self._translators[key]
 
     def _cache_get(self, text, source_lang):

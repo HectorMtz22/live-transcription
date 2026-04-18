@@ -1,0 +1,8 @@
+evaluate
+datasets
+peft
+torch
+transformers
+sentencepiece
+pandas
+datacollective

@@ -17,15 +17,14 @@ LANG_NAMES = {
 class QwenTranslator:
     """Translates text using a local Qwen LLM with caching."""
 
-    def __init__(self, target_lang="en", model_repo=QWEN_MODEL, gpu_lock=None):
+    def __init__(self, target_lang="en", model_repo=QWEN_MODEL):
         self.target_lang = target_lang
         self._cache = OrderedDict()
         self._lock = threading.Lock()
-        self._gpu_lock = gpu_lock  # Shared lock to serialize Metal/MLX ops with Whisper
+        self._gpu_lock = None  # Engine.start() will inject this via set_gpu_lock()
 
         try:
             from mlx_lm import load
-
             print(f"Loading Qwen translator model '{model_repo}'...")
             self._model, self._tokenizer = load(model_repo)
             self._available = True
@@ -36,6 +35,10 @@ class QwenTranslator:
             self._model = None
             self._tokenizer = None
             self._available = False
+
+    def set_gpu_lock(self, lock):
+        """Share the engine's Metal/MLX lock so Whisper and Qwen don't collide."""
+        self._gpu_lock = lock
 
     def _cache_get(self, text, source_lang):
         key = (text.strip(), source_lang)
