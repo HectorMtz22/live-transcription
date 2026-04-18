@@ -266,6 +266,7 @@ def main() -> None:
         print("\n\nStopping...")
 
     signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     try:
         engine.start()

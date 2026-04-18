@@ -1,0 +1,6 @@
+evaluate
+datasets
+peft
+torch
+transformers
+sentencepiece
