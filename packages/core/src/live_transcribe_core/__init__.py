@@ -1,5 +1,6 @@
 """Real-time transcription engine: VAD, Whisper, translation, summarization."""
 
+from live_transcribe_core.engine import EngineConfig, TranscriptionEngine
 from live_transcribe_core.events import (
     EngineListener,
     SegmentEvent,
@@ -9,9 +10,11 @@ from live_transcribe_core.events import (
 )
 
 __all__ = [
+    "EngineConfig",
     "EngineListener",
     "SegmentEvent",
     "StatusEvent",
     "SummaryEvent",
     "TranslationEvent",
+    "TranscriptionEngine",
 ]
