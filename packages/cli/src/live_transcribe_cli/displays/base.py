@@ -46,8 +46,11 @@ class BaseDisplay(EngineListener):
             return
         if event.is_update:
             self._render_translation_update(seg, event.text)
-        else:
+        elif event.text:
             self._render_translation(seg, event.text)
+        else:
+            # No translation available for this segment — render as plain text.
+            self._render_segment_without_translation(seg)
 
     def on_summary(self, event: SummaryEvent) -> None:
         self._render_summary(event)

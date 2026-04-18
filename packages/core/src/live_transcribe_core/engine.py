@@ -387,6 +387,15 @@ class TranscriptionEngine:
                     if isinstance(self._config.translator, QwenTranslator) and self._translation_pool is not None:
                         self._translation_pool.submit(self._retranslate_recent, lang)
                 else:
+                    # Translator configured but this language isn't in translate_langs —
+                    # emit an empty TranslationEvent so the display renders the segment
+                    # without waiting for a translation that will never arrive.
+                    if self._config.translator is not None:
+                        self._listener.on_translation(TranslationEvent(
+                            segment_id=entry_id,
+                            text="",
+                            is_update=False,
+                        ))
                     self._recent_context.append((full_text, None))
         except Exception as e:
             self._listener.on_status(StatusEvent(
