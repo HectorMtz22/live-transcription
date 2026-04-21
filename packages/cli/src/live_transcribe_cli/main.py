@@ -340,9 +340,11 @@ def main() -> None:
                 paths.append(translated)
             if summaries_path:
                 paths.append(summaries_path)
-            joined = "\n  ".join(paths)
-            label = "Transcripts saved to:" if len(paths) > 1 else "Transcript saved to:"
-            print(f"\n\033[1;32m{label}\n  {joined}\033[0m")
+            if len(paths) == 1:
+                print(f"\n\033[1;32mTranscript saved to: {paths[0]}\033[0m")
+            else:
+                joined = "\n  ".join(paths)
+                print(f"\n\033[1;32mTranscripts saved to:\n  {joined}\033[0m")
         print("Done.")
 
 

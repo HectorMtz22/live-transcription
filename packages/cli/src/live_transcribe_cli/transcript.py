@@ -28,11 +28,12 @@ def save_transcript(
         return ("", None, None)
 
     os.makedirs(transcript_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    header_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    header_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
     original_path = os.path.join(transcript_dir, f"transcript_{timestamp}_original.txt")
-    with open(original_path, "w") as f:
+    with open(original_path, "w", encoding="utf-8") as f:
         f.write(f"Transcript (Original) - {header_time}\n")
         f.write("=" * 60 + "\n\n")
         current_speaker = None
@@ -49,7 +50,7 @@ def save_transcript(
         translated_path = os.path.join(
             transcript_dir, f"transcript_{timestamp}_{target_name}.txt"
         )
-        with open(translated_path, "w") as f:
+        with open(translated_path, "w", encoding="utf-8") as f:
             f.write(f"Transcript ({target_label}) - {header_time}\n")
             f.write("=" * 60 + "\n\n")
             current_speaker = None
@@ -65,7 +66,7 @@ def save_transcript(
         summaries_path = os.path.join(
             transcript_dir, f"transcript_{timestamp}_summaries.txt"
         )
-        with open(summaries_path, "w") as f:
+        with open(summaries_path, "w", encoding="utf-8") as f:
             f.write(f"Summaries - {header_time}\n")
             f.write("=" * 60 + "\n\n")
             for summary in summaries:
