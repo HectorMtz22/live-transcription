@@ -194,7 +194,7 @@ class SummarizerProcess:
             # doesn't spin on `not self._stop_event.is_set()` forever.
             self._stop_event.set()
         if self._poll_thread is not None:
-            self._poll_thread.join(timeout=5)
+            self._poll_thread.join(timeout=30)
 
     def _poll_summaries(self):
         """Poll the summary queue and invoke on_summary(item_dict)."""

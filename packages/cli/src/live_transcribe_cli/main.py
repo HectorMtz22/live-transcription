@@ -160,7 +160,7 @@ def _pick_summary(args) -> bool:
     print("\nLive summary (local LLM):")
     print("-" * 40)
     print("  [1] Off")
-    print("  [2] On (rolling summary via Qwen 7B)")
+    print("  [2] On (chunked summary via Qwen 7B, every 5 lines)")
     print()
     try:
         s_choice = input("Select [Enter=1]: ").strip()
@@ -253,7 +253,7 @@ def main() -> None:
     parser.add_argument("--display", choices=["columns", "chat"], default=None,
                         help="Display mode: columns or chat")
     parser.add_argument("--summary", choices=["on", "off"], default=None,
-                        help="Enable live rolling summary via local LLM")
+                        help="Enable live chunked summary via local LLM (every 5 transcript lines)")
     parser.add_argument("--diarize", choices=["on", "off"], default="off",
                         help="Speaker diarization (default: off)")
     args = parser.parse_args()
