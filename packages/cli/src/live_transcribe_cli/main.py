@@ -327,16 +327,22 @@ def main() -> None:
         stream.close()
         engine.stop()
         transcript_dir = _resolve_transcript_dir()
-        original, translated = save_transcript(
+        original, translated, summaries_path = save_transcript(
             engine.get_transcript(),
             translations=display.translations,
             target_lang=target_lang,
             transcript_dir=transcript_dir,
+            summaries=display.summaries,
         )
-        if translated:
-            print(f"\n\033[1;32mTranscripts saved to:\n  {original}\n  {translated}\033[0m")
-        elif original:
-            print(f"\n\033[1;32mTranscript saved to: {original}\033[0m")
+        if original:
+            paths = [original]
+            if translated:
+                paths.append(translated)
+            if summaries_path:
+                paths.append(summaries_path)
+            joined = "\n  ".join(paths)
+            label = "Transcripts saved to:" if len(paths) > 1 else "Transcript saved to:"
+            print(f"\n\033[1;32m{label}\n  {joined}\033[0m")
         print("Done.")
 
 
