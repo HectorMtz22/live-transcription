@@ -28,10 +28,11 @@ def _build_prompt(lines, target_lang, previous_summary):
     return (
         f"You are a summarizer. Below is a chunk of a live conversation transcript "
         f"(may contain Korean, English, or Spanish).\n\n"
-        f"Previous summary (for context only — do NOT repeat it):\n{prev}\n\n"
+        f"Previous summary (reference only — do not restate or paraphrase it):\n{prev}\n\n"
         f"New transcript chunk:\n{transcript}\n\n"
         f"Write a concise summary in {target_lang} of ONLY the new chunk above. "
-        f"Use the previous summary for context (pronouns, topic carry-over). "
+        f"Use the previous summary only to resolve implied references (pronouns, "
+        f"unresolved topics) — do not restate or paraphrase it. "
         f"Focus on key topics, decisions, and important points. Keep it under 120 words.\n\n"
         f"Summary:"
     )
@@ -178,12 +179,22 @@ class SummarizerProcess:
         self._poll_thread.start()
 
     def stop(self):
-        """Signal the child to stop, wait for the final-chunk event, and clean up."""
+        """Signal the child to stop, drain the final-chunk event, and clean up.
+
+        Joins _poll_thread so the `on_summary` callback has fired for every
+        queued item before this returns — the engine relies on this ordering
+        to keep `StatusEvent("stopped")` the terminal listener event.
+        """
         # Sentinel triggers the final-chunk path inside the worker.
         self._line_queue.put(None)
         self._process.join(timeout=45)
         if self._process.is_alive():
             self._process.terminate()
+            # Child was killed before signaling — unblock the poll thread so it
+            # doesn't spin on `not self._stop_event.is_set()` forever.
+            self._stop_event.set()
+        if self._poll_thread is not None:
+            self._poll_thread.join(timeout=5)
 
     def _poll_summaries(self):
         """Poll the summary queue and invoke on_summary(item_dict)."""
