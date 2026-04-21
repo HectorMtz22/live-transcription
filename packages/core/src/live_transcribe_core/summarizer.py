@@ -5,7 +5,7 @@ import threading
 import time
 
 # Model to use for summarization (small, fast, multilingual)
-SUMMARIZER_MODEL = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+SUMMARIZER_MODEL = "Qwen/Qwen3-8B-MLX-4bit"
 
 # How many new transcript lines before triggering a new summary
 SUMMARY_INTERVAL = 5
@@ -34,7 +34,8 @@ def _generate_with_model(model, tokenizer, lines, target_lang):
     prompt = _build_prompt(lines, target_lang)
     messages = [{"role": "user", "content": prompt}]
     formatted = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
+        messages, tokenize=False, add_generation_prompt=True,
+        enable_thinking=False,
     )
     summary = generate(
         model, tokenizer,
