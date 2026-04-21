@@ -28,6 +28,8 @@ class TranslationEvent:
 
 @dataclass(frozen=True)
 class SummaryEvent:
+    index: int         # 1-based chunk number
+    timestamp: str     # "HH:MM:SS" when the chunk fired
     text: str
     is_final: bool = False   # True for the one emitted at engine shutdown
 

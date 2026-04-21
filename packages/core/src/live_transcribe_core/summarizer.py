@@ -1,37 +1,47 @@
-"""Live rolling summarizer using a local MLX LLM."""
+"""Live chunked summarizer using a local MLX LLM.
+
+Every `interval` transcript lines, a chunk summary is produced over just
+those lines plus the previous chunk's summary as context. Summaries are
+emitted as dicts on the summary queue:
+
+    {"index": int, "timestamp": "HH:MM:SS", "text": str, "is_final": bool}
+"""
 
 import multiprocessing as mp
 import threading
 import time
+from datetime import datetime
 
 # Model to use for summarization (small, fast, multilingual)
 SUMMARIZER_MODEL = "mlx-community/Qwen2.5-7B-Instruct-4bit"
 
-# How many new transcript lines before triggering a new summary
+# How many new transcript lines before triggering a new chunk summary
 SUMMARY_INTERVAL = 5
 
 
-def _build_prompt(lines, target_lang):
-    """Build the summarization prompt from transcript lines."""
+def _build_prompt(lines, target_lang, previous_summary):
+    """Build the summarization prompt for one chunk."""
     transcript = "\n".join(
-        f"{l['speaker']}: {l['text']}" for l in lines
+        f"{line['speaker']}: {line['text']}" for line in lines
     )
+    prev = previous_summary if previous_summary else "(none — this is the first chunk)"
     return (
-        f"You are a summarizer. Below is a live conversation transcript "
-        f"(may contain Korean, English, or Spanish). "
-        f"Write a concise rolling summary in {target_lang}. "
-        f"Focus on key topics, decisions, and important points. "
-        f"Keep it under 200 words.\n\n"
-        f"Transcript:\n{transcript}\n\n"
+        f"You are a summarizer. Below is a chunk of a live conversation transcript "
+        f"(may contain Korean, English, or Spanish).\n\n"
+        f"Previous summary (for context only — do NOT repeat it):\n{prev}\n\n"
+        f"New transcript chunk:\n{transcript}\n\n"
+        f"Write a concise summary in {target_lang} of ONLY the new chunk above. "
+        f"Use the previous summary for context (pronouns, topic carry-over). "
+        f"Focus on key topics, decisions, and important points. Keep it under 120 words.\n\n"
         f"Summary:"
     )
 
 
-def _generate_with_model(model, tokenizer, lines, target_lang):
-    """Generate a summary using the loaded model."""
+def _generate_with_model(model, tokenizer, lines, target_lang, previous_summary):
+    """Generate a chunk summary using the loaded model."""
     from mlx_lm import generate
 
-    prompt = _build_prompt(lines, target_lang)
+    prompt = _build_prompt(lines, target_lang, previous_summary)
     messages = [{"role": "user", "content": prompt}]
     formatted = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
@@ -45,10 +55,15 @@ def _generate_with_model(model, tokenizer, lines, target_lang):
     return summary.strip()
 
 
-class Summarizer:
-    """Accumulates transcript lines and periodically generates a rolling summary.
+def _now_hms():
+    return datetime.now().strftime("%H:%M:%S")
 
-    Runs summarization in-process (same MLX context as caller).
+
+class Summarizer:
+    """In-process chunked summarizer. Not used by the engine (kept for parity).
+
+    Produces one summary per `interval` transcript lines. Each summary covers
+    only the chunk's lines, conditioned on the previous chunk's summary.
     """
 
     def __init__(self, target_lang="en", model_repo=SUMMARIZER_MODEL,
@@ -57,11 +72,11 @@ class Summarizer:
 
         self.target_lang = target_lang
         self.interval = interval
-        self.on_summary = on_summary  # callback(summary_text)
+        self.on_summary = on_summary  # callback(item_dict)
 
-        self._lines = []
-        self._lines_at_last_summary = 0
-        self._last_summary = ""
+        self._buffer: list[dict] = []
+        self._previous_summary = ""
+        self._chunk_index = 0
         self._lock = threading.Lock()
         self._running = True
         self._thread = None
@@ -73,7 +88,7 @@ class Summarizer:
     def add_line(self, speaker, text, language):
         """Add a transcript line. Thread-safe."""
         with self._lock:
-            self._lines.append({"speaker": speaker, "text": text, "language": language})
+            self._buffer.append({"speaker": speaker, "text": text, "language": language})
 
     def start(self):
         """Start the background summarization thread."""
@@ -81,45 +96,55 @@ class Summarizer:
         self._thread.start()
 
     def stop(self):
-        """Stop the background thread and return the final summary."""
+        """Signal stop. Flushes any tail lines as a final chunk."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=30)
-        # Generate one final summary
-        return self._generate_summary()
+        self._flush_final()
 
     def _run(self):
         while self._running:
             time.sleep(1)
-            with self._lock:
-                pending = len(self._lines) - self._lines_at_last_summary
-            if pending >= self.interval:
-                summary = self._generate_summary()
-                if summary and self.on_summary:
-                    self.on_summary(summary)
+            self._maybe_fire_chunk()
 
-    def _generate_summary(self):
+    def _maybe_fire_chunk(self):
         with self._lock:
-            if not self._lines:
-                return self._last_summary
-            lines_snapshot = list(self._lines)
-            self._lines_at_last_summary = len(self._lines)
+            if len(self._buffer) < self.interval:
+                return
+            chunk_lines = self._buffer[:self.interval]
+            self._buffer = self._buffer[self.interval:]
 
-        self._last_summary = _generate_with_model(
-            self._model, self._tokenizer, lines_snapshot, self.target_lang
+        self._fire(chunk_lines, is_final=False)
+
+    def _flush_final(self):
+        with self._lock:
+            tail = list(self._buffer)
+            self._buffer.clear()
+        if tail:
+            self._fire(tail, is_final=True)
+
+    def _fire(self, lines, is_final):
+        self._chunk_index += 1
+        summary = _generate_with_model(
+            self._model, self._tokenizer, lines, self.target_lang, self._previous_summary
         )
-        return self._last_summary
+        self._previous_summary = summary
+        item = {
+            "index": self._chunk_index,
+            "timestamp": _now_hms(),
+            "text": summary,
+            "is_final": is_final,
+        }
+        if self.on_summary:
+            self.on_summary(item)
 
 
 class SummarizerProcess:
-    """Runs summarization in a separate process for GPU independence.
+    """Runs chunked summarization in a separate process for GPU independence.
 
     Uses multiprocessing with 'spawn' context to safely create a second
-    MLX/Metal context. The child process loads its own copy of the model
-    and generates summaries independently, so Whisper transcription in the
-    main process is never blocked.
-
-    Has the same public API as Summarizer (add_line, start, stop).
+    MLX/Metal context. Whisper transcription in the main process is never
+    blocked by summary generation.
     """
 
     def __init__(self, target_lang="en", model_repo=SUMMARIZER_MODEL,
@@ -127,7 +152,7 @@ class SummarizerProcess:
         self.target_lang = target_lang
         self.model_repo = model_repo
         self.interval = interval
-        self.on_summary = on_summary
+        self.on_summary = on_summary  # callback(item_dict)
 
         ctx = mp.get_context("spawn")
         self._line_queue = ctx.Queue()
@@ -153,46 +178,38 @@ class SummarizerProcess:
         self._poll_thread.start()
 
     def stop(self):
-        """Signal the child to stop, wait for final summary, and clean up."""
-        # Send sentinel to trigger final summary
+        """Signal the child to stop, wait for the final-chunk event, and clean up."""
+        # Sentinel triggers the final-chunk path inside the worker.
         self._line_queue.put(None)
         self._process.join(timeout=45)
         if self._process.is_alive():
             self._process.terminate()
 
-        # Drain any remaining summaries
-        final = None
-        while not self._summary_queue.empty():
-            try:
-                final = self._summary_queue.get_nowait()
-            except Exception:
-                break
-        return final
-
     def _poll_summaries(self):
-        """Poll the summary queue and invoke on_summary callback."""
+        """Poll the summary queue and invoke on_summary(item_dict)."""
         while not self._stop_event.is_set() or not self._summary_queue.empty():
             try:
-                summary = self._summary_queue.get(timeout=1.0)
-                if summary and self.on_summary:
-                    self.on_summary(summary)
+                item = self._summary_queue.get(timeout=1.0)
+                if item and self.on_summary:
+                    self.on_summary(item)
             except Exception:
                 continue
 
     @staticmethod
     def _worker(line_queue, summary_queue, stop_event, model_repo, target_lang, interval):
-        """Child process: loads model, generates summaries on demand."""
+        """Child process: loads model, produces chunk summaries."""
         from mlx_lm import load
 
         print(f"[SummarizerProcess] Loading model '{model_repo}'...")
         model, tokenizer = load(model_repo)
         print("[SummarizerProcess] Model ready.")
 
-        lines = []
-        lines_at_last_summary = 0
+        buffer: list[dict] = []
+        previous_summary = ""
+        chunk_index = 0
 
         while True:
-            # Drain all available lines from the queue
+            # Drain all available lines from the queue (non-blocking).
             got_sentinel = False
             while True:
                 try:
@@ -200,23 +217,40 @@ class SummarizerProcess:
                     if item is None:
                         got_sentinel = True
                         break
-                    lines.append(item)
+                    buffer.append(item)
                 except Exception:
                     break
 
-            pending = len(lines) - lines_at_last_summary
+            # Normal chunk: fire as many full chunks as the buffer allows.
+            while len(buffer) >= interval and not got_sentinel:
+                chunk_lines = buffer[:interval]
+                buffer = buffer[interval:]
+                chunk_index += 1
+                summary = _generate_with_model(
+                    model, tokenizer, chunk_lines, target_lang, previous_summary
+                )
+                previous_summary = summary
+                summary_queue.put({
+                    "index": chunk_index,
+                    "timestamp": _now_hms(),
+                    "text": summary,
+                    "is_final": False,
+                })
 
             if got_sentinel:
-                # Final summary before exiting
-                if lines:
-                    summary = _generate_with_model(model, tokenizer, lines, target_lang)
-                    summary_queue.put(summary)
+                # Final chunk: whatever tail is left (may be empty).
+                if buffer:
+                    chunk_index += 1
+                    summary = _generate_with_model(
+                        model, tokenizer, buffer, target_lang, previous_summary
+                    )
+                    summary_queue.put({
+                        "index": chunk_index,
+                        "timestamp": _now_hms(),
+                        "text": summary,
+                        "is_final": True,
+                    })
                 stop_event.set()
                 break
-
-            if pending >= interval:
-                summary = _generate_with_model(model, tokenizer, list(lines), target_lang)
-                lines_at_last_summary = len(lines)
-                summary_queue.put(summary)
 
             time.sleep(1)
