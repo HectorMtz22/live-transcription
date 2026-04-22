@@ -12,6 +12,9 @@ from typing import Any
 import sounddevice as sd
 from questionary import Choice
 from questionary import select as q_select
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 from live_transcribe_core.config import LANG_NAMES
 
@@ -20,7 +23,7 @@ from .audio import find_blackhole_device
 
 HARD_DEFAULTS = {
     "translator": "google",
-    "translate_from": {"ko"},
+    "translate_from": frozenset({"ko"}),
     "translate_to": "en",
     "display": "columns",
     "summary": False,
@@ -71,6 +74,7 @@ def _resolve_device_default(last_run: dict | None, devices: list[tuple[int, str]
 def _seed_defaults(args, last_run: dict | None) -> dict[str, Any]:
     """Merge hard defaults ← last_run ← CLI args into a defaults dict for pickers."""
     out: dict[str, Any] = dict(HARD_DEFAULTS)
+    out["translate_from"] = set(out["translate_from"])  # detach from module-level frozenset
     if last_run:
         if last_run.get("translator") in {"google", "deepl", "qwen", "nllb", "none"}:
             out["translator"] = last_run["translator"]
@@ -191,10 +195,6 @@ def _device_name(devices: list[tuple[int, str]], idx: int) -> str:
 def _render_review(values: dict, devices: list[tuple[int, str]], locked: set[str],
                    model_repo: str, diarize: bool) -> None:
     """Print the review summary via Rich panel."""
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.table import Table
-
     table = Table.grid(padding=(0, 1))
     table.add_column(style="bold cyan", no_wrap=True)
     table.add_column()
