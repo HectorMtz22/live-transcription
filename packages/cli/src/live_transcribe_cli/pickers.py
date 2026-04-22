@@ -137,7 +137,7 @@ def pick_display(default: str, show_back: bool) -> str | Any:
 def pick_summary(default: bool, show_back: bool) -> bool | Any:
     choices = [
         Choice(title="Off", value=False),
-        Choice(title="On (rolling summary via Qwen 7B)", value=True),
+        Choice(title="On (rolling summary via Qwen3-8B)", value=True),
     ]
     if show_back:
         choices.append(_BACK_CHOICE)
