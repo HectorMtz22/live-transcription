@@ -6,14 +6,17 @@ selects "← Back". All pickers share `STYLE` and obey KeyboardInterrupt.
 """
 from __future__ import annotations
 
-from typing import Any
-
 import questionary
 from questionary import Choice
 
 from live_transcribe_core.config import LANG_NAMES
 
-BACK: Any = object()
+
+class _Back:
+    """Private sentinel type for "← Back" picker results."""
+
+
+BACK: _Back = _Back()
 
 _BACK_CHOICE = Choice(title=[("class:back", "← Back")], value=BACK)
 
@@ -64,7 +67,7 @@ def pick_device(devices: list[tuple[int, str]], default_idx: int) -> int:
     return result
 
 
-def pick_translator(default: str, show_back: bool) -> str | Any:
+def pick_translator(default: str, show_back: bool) -> str | _Back:
     choices = [Choice(title=label, value=value) for value, label in _TRANSLATORS]
     if show_back:
         choices.append(_BACK_CHOICE)
@@ -77,35 +80,48 @@ def pick_translator(default: str, show_back: bool) -> str | Any:
     ).unsafe_ask()
 
 
-def pick_translate_from(default: set[str], show_back: bool) -> set[str] | Any:
-    lang_choices = [
-        Choice(
-            title=f"{name} ({code})",
-            value=code,
-            checked=code in default,
-        )
-        for code, name in LANG_NAMES.items()
-    ]
-    result = questionary.checkbox(
-        "Translate FROM (space toggles, enter confirms):",
-        choices=lang_choices,
-        style=STYLE,
-        instruction="(↑↓ navigate · space toggle · enter confirm)",
-    ).unsafe_ask()
-    # questionary.checkbox cannot embed a ← Back entry; offer it as a follow-up
-    # only when the user selected nothing AND show_back is True.
-    if not result and show_back:
-        go_back = questionary.confirm(
-            "No languages selected. Go back?",
-            default=True,
+def pick_translate_from(default: set[str], show_back: bool) -> set[str] | _Back:
+    """Multi-select source languages. On empty submission, explicitly ask
+    whether to keep a default, re-select, or go back (if allowed) — never
+    silently inject a default.
+    """
+    while True:
+        lang_choices = [
+            Choice(
+                title=f"{name} ({code})",
+                value=code,
+                checked=code in default,
+            )
+            for code, name in LANG_NAMES.items()
+        ]
+        result = questionary.checkbox(
+            "Translate FROM (space toggles, enter confirms):",
+            choices=lang_choices,
+            style=STYLE,
+            instruction="(↑↓ navigate · space toggle · enter confirm)",
+        ).unsafe_ask()
+        if result:
+            return set(result)
+        # Empty submission: questionary.checkbox cannot embed a ← Back row,
+        # so ask explicitly what the user meant.
+        followup: list[Choice] = [
+            Choice(title="Re-select languages", value="reselect"),
+            Choice(title="Use default (Korean only)", value="default"),
+        ]
+        if show_back:
+            followup.append(Choice(title=[("class:back", "← Back")], value="back"))
+        action = questionary.select(
+            "No languages selected. What next?",
+            choices=followup,
             style=STYLE,
         ).unsafe_ask()
-        if go_back:
+        if action == "default":
+            return {"ko"}
+        if action == "back":
             return BACK
-    return set(result) if result else {"ko"}
 
 
-def pick_translate_to(default: str, show_back: bool) -> str | Any:
+def pick_translate_to(default: str, show_back: bool) -> str | _Back:
     choices = [
         Choice(title=f"{name} ({code})", value=code)
         for code, name in LANG_NAMES.items()
@@ -121,7 +137,7 @@ def pick_translate_to(default: str, show_back: bool) -> str | Any:
     ).unsafe_ask()
 
 
-def pick_display(default: str, show_back: bool) -> str | Any:
+def pick_display(default: str, show_back: bool) -> str | _Back:
     choices = [Choice(title=label, value=value) for value, label in _DISPLAYS]
     if show_back:
         choices.append(_BACK_CHOICE)
@@ -134,7 +150,7 @@ def pick_display(default: str, show_back: bool) -> str | Any:
     ).unsafe_ask()
 
 
-def pick_summary(default: bool, show_back: bool) -> bool | Any:
+def pick_summary(default: bool, show_back: bool) -> bool | _Back:
     choices = [
         Choice(title="Off", value=False),
         Choice(title="On (rolling summary via Qwen3-8B)", value=True),
