@@ -5,7 +5,7 @@ from collections import OrderedDict
 
 TRANSLATION_CACHE_SIZE = 256
 
-QWEN_MODEL = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+QWEN_MODEL = "Qwen/Qwen3-8B-MLX-4bit"
 
 LANG_NAMES = {
     "ko": "Korean",
@@ -106,7 +106,8 @@ class QwenTranslator:
 
             messages = [{"role": "user", "content": "\n".join(prompt_parts)}]
             formatted = self._tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+                messages, tokenize=False, add_generation_prompt=True,
+                enable_thinking=False,
             )
 
             lock = self._gpu_lock or self._lock
