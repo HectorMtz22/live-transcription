@@ -160,7 +160,7 @@ def _pick_summary(args) -> bool:
     print("\nLive summary (local LLM):")
     print("-" * 40)
     print("  [1] Off")
-    print("  [2] On (rolling summary via Qwen 7B)")
+    print("  [2] On (chunked summary via Qwen 7B, every 5 lines)")
     print()
     try:
         s_choice = input("Select [Enter=1]: ").strip()
@@ -253,7 +253,7 @@ def main() -> None:
     parser.add_argument("--display", choices=["columns", "chat"], default=None,
                         help="Display mode: columns or chat")
     parser.add_argument("--summary", choices=["on", "off"], default=None,
-                        help="Enable live rolling summary via local LLM")
+                        help="Enable live chunked summary via local LLM (every 5 transcript lines)")
     parser.add_argument("--diarize", choices=["on", "off"], default="off",
                         help="Speaker diarization (default: off)")
     args = parser.parse_args()
@@ -327,16 +327,24 @@ def main() -> None:
         stream.close()
         engine.stop()
         transcript_dir = _resolve_transcript_dir()
-        original, translated = save_transcript(
+        original, translated, summaries_path = save_transcript(
             engine.get_transcript(),
             translations=display.translations,
             target_lang=target_lang,
             transcript_dir=transcript_dir,
+            summaries=display.summaries,
         )
-        if translated:
-            print(f"\n\033[1;32mTranscripts saved to:\n  {original}\n  {translated}\033[0m")
-        elif original:
-            print(f"\n\033[1;32mTranscript saved to: {original}\033[0m")
+        if original:
+            paths = [original]
+            if translated:
+                paths.append(translated)
+            if summaries_path:
+                paths.append(summaries_path)
+            if len(paths) == 1:
+                print(f"\n\033[1;32mTranscript saved to: {paths[0]}\033[0m")
+            else:
+                joined = "\n  ".join(paths)
+                print(f"\n\033[1;32mTranscripts saved to:\n  {joined}\033[0m")
         print("Done.")
 
 
