@@ -9,4 +9,17 @@ members = ["packages/*"]
 [dependency-groups]
 dev = [
     "ruff",
+    "pytest",
+    "pytest-cov",
+    "pytest-timeout",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 10
+filterwarnings = [
+    "error",
+    # Transitive import-time deprecations we don't own.
+    "ignore::DeprecationWarning:resemblyzer.*",
+    "ignore::UserWarning:webrtcvad",
 ]
