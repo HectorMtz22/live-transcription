@@ -129,6 +129,12 @@ def test_qwen_returns_none_on_exception(monkeypatch):
     t._tokenizer.apply_chat_template = MagicMock(side_effect=RuntimeError("boom"))
     t._available = True
 
+    # Prevent real mlx_lm import (via `from mlx_lm import generate` inside
+    # translate()); real Metal init on top of torch's causes a shutdown segfault.
+    fake_module = types.ModuleType("mlx_lm")
+    fake_module.generate = MagicMock()
+    monkeypatch.setitem(sys.modules, "mlx_lm", fake_module)
+
     assert t.translate("hello", "en") is None
 
 
