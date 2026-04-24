@@ -8,13 +8,24 @@ from live_transcribe_core.config import (
     SPEAKER_SIMILARITY,
 )
 
-# Try to import resemblyzer for speaker diarization
-try:
-    from resemblyzer import VoiceEncoder, preprocess_wav
-    DIARIZATION_AVAILABLE = True
-except ImportError:
-    DIARIZATION_AVAILABLE = False
-    print("[WARN] resemblyzer not available - speaker separation disabled")
+# Try to import resemblyzer for speaker diarization.
+# webrtcvad (pulled in transitively) imports the deprecated pkg_resources API
+# and emits a UserWarning under setuptools>=81. Silence it at the source.
+import warnings
+
+with warnings.catch_warnings():
+    warnings.filterwarnings(
+        "ignore",
+        category=UserWarning,
+        message="pkg_resources is deprecated as an API.*",
+    )
+    try:
+        from resemblyzer import VoiceEncoder, preprocess_wav
+
+        DIARIZATION_AVAILABLE = True
+    except ImportError:
+        DIARIZATION_AVAILABLE = False
+        print("[WARN] resemblyzer not available - speaker separation disabled")
 
 
 class SpeakerTracker:
@@ -30,7 +41,7 @@ class SpeakerTracker:
             self.encoder = None
         self.speaker_embeddings = []  # List of (label, embedding) tuples
         self.speaker_count = 0
-        self.unmatched_streak = 0      # Consecutive chunks that didn't match any speaker
+        self.unmatched_streak = 0  # Consecutive chunks that didn't match any speaker
         self.pending_embedding = None  # Embedding accumulator for potential new speaker
 
     def identify_speaker(self, audio_chunk):
