@@ -16,3 +16,9 @@ lint:
 clean:
     rm -rf .venv packages/core/build packages/cli/build
     find packages -name '__pycache__' -type d -exec rm -rf {} +
+
+test *ARGS:
+    uv run pytest {{ARGS}}
+
+test-cov:
+    uv run pytest --cov=packages --cov-report=term-missing
