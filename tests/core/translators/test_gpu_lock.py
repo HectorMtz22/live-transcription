@@ -43,4 +43,6 @@ def test_set_gpu_lock_on_other_backends_is_noop():
         t = cls.__new__(cls)
         # Must not raise; must not add a _gpu_lock attr.
         set_gpu_lock(t, lock)
-        assert not hasattr(t, "_gpu_lock") or getattr(t, "_gpu_lock", None) is not lock
+        assert not hasattr(t, "_gpu_lock"), (
+            f"{cls.__name__}._gpu_lock unexpectedly set"
+        )

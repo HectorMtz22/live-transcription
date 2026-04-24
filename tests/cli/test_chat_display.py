@@ -27,10 +27,16 @@ def test_same_speaker_keeps_same_side():
 
 
 def test_each_speaker_gets_distinct_color_until_palette_exhausts():
+    from live_transcribe_cli.displays.chat import SPEAKER_COLORS
+
     d = ChatDisplay(has_translator=False)
-    c1 = d._speaker_color("A")
-    c2 = d._speaker_color("B")
-    assert c1 != c2
+    palette_size = len(SPEAKER_COLORS)
+    # First N speakers each get a distinct palette entry in order.
+    colors = [d._speaker_color(f"Speaker {i}") for i in range(palette_size)]
+    assert colors == list(SPEAKER_COLORS)
+    # The (N+1)-th speaker wraps modulo the palette size.
+    wraparound = d._speaker_color(f"Speaker {palette_size}")
+    assert wraparound == SPEAKER_COLORS[0]
 
 
 def test_translation_update_keeps_entry_index_when_live():
