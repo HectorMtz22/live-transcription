@@ -53,10 +53,8 @@ def test_context_is_forwarded_into_chat_template(monkeypatch):
     assert "mundo" in prompt_content
 
 
-def test_translate_acquires_gpu_lock_when_injected(monkeypatch):
-    t = _build_inert_qwen()
-    _install_fake_generate(monkeypatch, return_value="done")
-
+def _spy_lock():
+    """Returns (lock, acquire_spy, release_spy) for counting context-manager use."""
     acquire_spy = MagicMock()
     release_spy = MagicMock()
 
@@ -69,11 +67,38 @@ def test_translate_acquires_gpu_lock_when_injected(monkeypatch):
             release_spy()
             return False
 
-    t._gpu_lock = SpyLock()
+    return SpyLock(), acquire_spy, release_spy
+
+
+def test_translate_acquires_gpu_lock_when_injected(monkeypatch):
+    t = _build_inert_qwen()
+    _install_fake_generate(monkeypatch, return_value="done")
+
+    lock, acquire_spy, release_spy = _spy_lock()
+    t._gpu_lock = lock
     t.translate("hi", "en")
 
     assert acquire_spy.call_count == 1
     assert release_spy.call_count == 1
+
+
+def test_gpu_lock_released_when_generate_raises(monkeypatch):
+    """If generate() raises, the GPU lock MUST still be released.
+
+    An orphaned hold on the singleton Metal lock would deadlock the whole
+    pipeline (Whisper would block forever in _transcribe_segment).
+    """
+    t = _build_inert_qwen()
+    fake_module = types.ModuleType("mlx_lm")
+    fake_module.generate = MagicMock(side_effect=RuntimeError("boom"))
+    monkeypatch.setitem(sys.modules, "mlx_lm", fake_module)
+
+    lock, acquire_spy, release_spy = _spy_lock()
+    t._gpu_lock = lock
+
+    assert t.translate("hi", "en") is None  # exception swallowed, returns None
+    assert acquire_spy.call_count == 1
+    assert release_spy.call_count == 1  # released, not orphaned
 
 
 def test_translate_falls_back_to_internal_lock_without_gpu_lock(monkeypatch):

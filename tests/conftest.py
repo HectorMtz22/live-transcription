@@ -226,6 +226,31 @@ def fake_whisper_result():
 
 
 @pytest.fixture
+def fake_translator():
+    """Factory → FakeTranslator(**kwargs).
+
+    Exposed as a fixture (rather than a top-level class import) so tests don't
+    need `from conftest import ...`, which is fragile under pytest's collection
+    order when subdirectory conftest.py files exist.
+    """
+
+    def _make(**kwargs):
+        return FakeTranslator(**kwargs)
+
+    return _make
+
+
+@pytest.fixture
+def fake_qwen_translator():
+    """Factory → FakeQwenTranslator(**kwargs). See `fake_translator` for why."""
+
+    def _make(**kwargs):
+        return FakeQwenTranslator(**kwargs)
+
+    return _make
+
+
+@pytest.fixture
 def patched_engine(monkeypatch):
     """Factory → (engine, listener) with Whisper/VAD/summarizer patched.
 

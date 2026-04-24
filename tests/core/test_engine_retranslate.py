@@ -12,8 +12,6 @@ import numpy as np
 
 from live_transcribe_core.config import SAMPLE_RATE
 
-from conftest import FakeQwenTranslator
-
 
 def _drive_n(engine, n):
     """Call _transcribe_segment n times with a dummy 1-second buffer.
@@ -29,6 +27,7 @@ def _drive_n(engine, n):
 def test_qwen_emits_is_update_true_when_retranslation_differs(
     patched_engine,
     fake_whisper_result,
+    fake_qwen_translator,
 ):
     """Drive 4 segments. Initial translations: 'tr1'..'tr4'. Retranslations
     return different strings ('retr0'..'retr29'), so is_update=True events
@@ -36,7 +35,7 @@ def test_qwen_emits_is_update_true_when_retranslation_differs(
     """
     # 4 initial + enough retranslations for multiple rounds.
     responses = ["tr1", "tr2", "tr3", "tr4"] + [f"retr{i}" for i in range(30)]
-    translator = FakeQwenTranslator(responses=responses)
+    translator = fake_qwen_translator(responses=responses)
 
     # Prepend a warmup result: engine.start() calls transcribe() once with a
     # silent dummy to warm up Whisper; that call consumes the first list entry.
@@ -67,11 +66,12 @@ def test_qwen_emits_is_update_true_when_retranslation_differs(
 def test_qwen_retranslate_skipped_when_translation_unchanged(
     patched_engine,
     fake_whisper_result,
+    fake_qwen_translator,
 ):
     """If FakeQwen returns the SAME translation on the retranslate call, no
     is_update event should be emitted for that entry.
     """
-    translator = FakeQwenTranslator(default="same-translation")
+    translator = fake_qwen_translator(default="same-translation")
     # Prepend a warmup result for the engine.start() warmup transcribe call.
     whisper_results = [
         fake_whisper_result(text="warmup", lang="en"),
@@ -95,11 +95,13 @@ def test_qwen_retranslate_skipped_when_translation_unchanged(
     assert updates == []
 
 
-def test_qwen_gpu_lock_injected_at_start(patched_engine, fake_whisper_result):
+def test_qwen_gpu_lock_injected_at_start(
+    patched_engine, fake_whisper_result, fake_qwen_translator
+):
     """Engine.start() calls translators.set_gpu_lock(translator, self._gpu_lock)
     when the translator exposes set_gpu_lock. FakeQwenTranslator records it.
     """
-    translator = FakeQwenTranslator()
+    translator = fake_qwen_translator()
     engine, _ = patched_engine(
         whisper_result=fake_whisper_result("hi", lang="en"),
         translator=translator,

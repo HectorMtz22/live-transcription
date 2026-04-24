@@ -18,8 +18,6 @@ spins (with short sleeps) until engine._audio_queue is empty.
 
 import time
 
-from conftest import FakeTranslator
-
 from live_transcribe_core.config import VAD_FRAME_SAMPLES
 
 
@@ -65,10 +63,11 @@ def test_push_audio_emits_segment_event(
 def test_translation_event_follows_segment_when_lang_enabled(
     patched_engine,
     fake_whisper_result,
+    fake_translator,
     speech_chunk,
     silence_chunk,
 ):
-    translator = FakeTranslator(responses=["hola mundo"])
+    translator = fake_translator(responses=["hola mundo"])
     engine, listener = patched_engine(
         whisper_result=fake_whisper_result("hello world", lang="en"),
         vad_script=[0.9] * 30 + [0.1] * 60,
@@ -92,6 +91,7 @@ def test_translation_event_follows_segment_when_lang_enabled(
 def test_translator_configured_but_lang_not_eligible_emits_empty_translation(
     patched_engine,
     fake_whisper_result,
+    fake_translator,
     speech_chunk,
     silence_chunk,
 ):
@@ -99,7 +99,7 @@ def test_translator_configured_but_lang_not_eligible_emits_empty_translation(
     the engine emits TranslationEvent(text="") so displays render the
     segment without waiting for a translation that will never come.
     """
-    translator = FakeTranslator()
+    translator = fake_translator()
     engine, listener = patched_engine(
         whisper_result=fake_whisper_result("hello world", lang="en"),
         vad_script=[0.9] * 30 + [0.1] * 60,

@@ -23,7 +23,12 @@ def test_second_speaker_gets_right_side():
 
 def test_same_speaker_keeps_same_side():
     d = ChatDisplay(has_translator=False)
-    assert d._speaker_side("Alice") == d._speaker_side("Alice")
+    # Alice is the first speaker → "left"
+    assert d._speaker_side("Alice") == "left"
+    # Another speaker consumes the next side slot
+    d._speaker_side("Bob")
+    # Alice's side mapping is stable across other speaker insertions
+    assert d._speaker_side("Alice") == "left"
 
 
 def test_each_speaker_gets_distinct_color_until_palette_exhausts():
