@@ -23,8 +23,9 @@ from live_transcribe_core.whisper import is_hallucination
         "시청해 주셔서 감사합니다.",          # Korean known phrase, trailing period
         "aaaa",                            # 1-char alphabet
         "ababab",                          # 2-char alphabet
-        "la la la la",                     # 2-gram repetition dominates
+        "la la la la",                     # unique_tokens <= 2, len >= 4
         "the the the the the",             # dominant-token ratio > 70%
+        "hello world foo hello world foo hello world foo",  # 3-gram repetition
     ],
 )
 def test_hallucinated_texts_return_true(text):
