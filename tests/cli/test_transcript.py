@@ -2,6 +2,7 @@
 
 Uses pytest's tmp_path fixture — no real disk pollution.
 """
+
 from pathlib import Path
 
 from live_transcribe_core import SegmentEvent
@@ -14,7 +15,10 @@ def _seg(sid, speaker, text, lang="en", ts="00:00:00"):
 
 def test_empty_segments_returns_empty_paths(tmp_path):
     orig, trans = save_transcript(
-        segments=[], translations={}, target_lang="es", transcript_dir=str(tmp_path),
+        segments=[],
+        translations={},
+        target_lang="es",
+        transcript_dir=str(tmp_path),
     )
     assert orig == ""
     assert trans is None
@@ -23,7 +27,10 @@ def test_empty_segments_returns_empty_paths(tmp_path):
 def test_original_file_is_always_written_when_segments_present(tmp_path):
     segs = [_seg("1", "Speaker 1", "hello")]
     orig, trans = save_transcript(
-        segments=segs, translations={}, target_lang="es", transcript_dir=str(tmp_path),
+        segments=segs,
+        translations={},
+        target_lang="es",
+        transcript_dir=str(tmp_path),
     )
     assert orig
     assert trans is None
@@ -47,7 +54,10 @@ def test_translated_file_written_when_translations_non_empty(tmp_path):
 def test_translated_file_suffix_matches_target_lang_name(tmp_path):
     segs = [_seg("1", "Speaker 1", "hello")]
     _, trans = save_transcript(
-        segs, {"1": "안녕"}, target_lang="ko", transcript_dir=str(tmp_path),
+        segs,
+        {"1": "안녕"},
+        target_lang="ko",
+        transcript_dir=str(tmp_path),
     )
     assert trans.endswith("_korean.txt")
 

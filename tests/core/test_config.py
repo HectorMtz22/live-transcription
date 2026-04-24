@@ -6,6 +6,7 @@ This test pins the first three; HALLUCINATION_PHRASES intentionally has
 per-language entries rather than a per-language bucket, so it's not part
 of the keyset comparison.
 """
+
 from live_transcribe_core.config import (
     INITIAL_PROMPTS,
     LANG_NAMES,

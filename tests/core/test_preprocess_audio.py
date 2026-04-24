@@ -2,6 +2,7 @@
 
 Shape / normalization / dtype checks only — audio quality is visual.
 """
+
 import numpy as np
 
 from live_transcribe_core.config import SPEECH_PAD_SAMPLES, SAMPLE_RATE

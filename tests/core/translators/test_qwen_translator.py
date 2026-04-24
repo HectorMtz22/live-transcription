@@ -1,13 +1,13 @@
 """Qwen-only behaviors: context threading into the prompt, lock acquisition,
 LRU cache eviction.
 """
+
 import sys
 import threading
 import types
 from collections import OrderedDict
 from unittest.mock import MagicMock
 
-import pytest
 
 from live_transcribe_core.translators import qwen as qmod
 

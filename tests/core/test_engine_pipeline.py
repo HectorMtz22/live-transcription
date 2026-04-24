@@ -15,6 +15,7 @@ be called before the thread has had a chance to drain the audio queue, or the
 speech buffer stays empty and no segment is emitted.  _drain_audio_queue()
 spins (with short sleeps) until engine._audio_queue is empty.
 """
+
 import time
 
 from conftest import FakeTranslator
@@ -31,8 +32,9 @@ def _drain_audio_queue(engine, timeout=2.0):
         time.sleep(0.005)
 
 
-def _feed_speech_then_silence(engine, speech_chunk, silence_chunk,
-                              speech_frames=30, silence_frames=60):
+def _feed_speech_then_silence(
+    engine, speech_chunk, silence_chunk, speech_frames=30, silence_frames=60
+):
     """Push enough VAD-frame-aligned audio to trigger one flush, then
     wait for the VAD thread to drain the queue before returning."""
     for _ in range(speech_frames):
@@ -43,7 +45,10 @@ def _feed_speech_then_silence(engine, speech_chunk, silence_chunk,
 
 
 def test_push_audio_emits_segment_event(
-    patched_engine, fake_whisper_result, speech_chunk, silence_chunk,
+    patched_engine,
+    fake_whisper_result,
+    speech_chunk,
+    silence_chunk,
 ):
     engine, listener = patched_engine(
         whisper_result=fake_whisper_result("hello world", lang="en"),
@@ -58,7 +63,10 @@ def test_push_audio_emits_segment_event(
 
 
 def test_translation_event_follows_segment_when_lang_enabled(
-    patched_engine, fake_whisper_result, speech_chunk, silence_chunk,
+    patched_engine,
+    fake_whisper_result,
+    speech_chunk,
+    silence_chunk,
 ):
     translator = FakeTranslator(responses=["hola mundo"])
     engine, listener = patched_engine(
@@ -73,7 +81,8 @@ def test_translation_event_follows_segment_when_lang_enabled(
     engine.stop()
     seg = listener.wait_for("segment", timeout=2.0)
     tevt = listener.wait_for(
-        "translation", timeout=2.0,
+        "translation",
+        timeout=2.0,
         predicate=lambda e: e.segment_id == seg.id,
     )
     assert tevt.text == "hola mundo"
@@ -81,7 +90,10 @@ def test_translation_event_follows_segment_when_lang_enabled(
 
 
 def test_translator_configured_but_lang_not_eligible_emits_empty_translation(
-    patched_engine, fake_whisper_result, speech_chunk, silence_chunk,
+    patched_engine,
+    fake_whisper_result,
+    speech_chunk,
+    silence_chunk,
 ):
     """When translator is set but source_lang is not in translate_langs,
     the engine emits TranslationEvent(text="") so displays render the
@@ -100,7 +112,8 @@ def test_translator_configured_but_lang_not_eligible_emits_empty_translation(
     engine.stop()
     seg = listener.wait_for("segment", timeout=2.0)
     tevt = listener.wait_for(
-        "translation", timeout=2.0,
+        "translation",
+        timeout=2.0,
         predicate=lambda e: e.segment_id == seg.id,
     )
     assert tevt.text == ""
@@ -110,7 +123,10 @@ def test_translator_configured_but_lang_not_eligible_emits_empty_translation(
 
 
 def test_get_transcript_returns_emitted_segments(
-    patched_engine, fake_whisper_result, speech_chunk, silence_chunk,
+    patched_engine,
+    fake_whisper_result,
+    speech_chunk,
+    silence_chunk,
 ):
     engine, listener = patched_engine(
         whisper_result=fake_whisper_result("hi there", lang="en"),

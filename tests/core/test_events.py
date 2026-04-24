@@ -3,6 +3,7 @@
 Events MUST be frozen (safe to share across threads) and asdict() output
 MUST be JSON-serializable (future-ready for WebSocket transport).
 """
+
 import json
 from dataclasses import FrozenInstanceError, asdict
 
@@ -17,7 +18,9 @@ from live_transcribe_core.events import (
 
 
 def test_segment_event_is_frozen():
-    e = SegmentEvent(id="x", timestamp="00:00:00", speaker="Speaker", text="hi", language="en")
+    e = SegmentEvent(
+        id="x", timestamp="00:00:00", speaker="Speaker", text="hi", language="en"
+    )
     with pytest.raises(FrozenInstanceError):
         e.text = "mutated"
 
@@ -39,7 +42,9 @@ def test_status_event_default_message_is_none():
 
 def test_events_asdict_is_json_serializable():
     evts = [
-        SegmentEvent(id="1", timestamp="00:00:01", speaker="Speaker 1", text="hi", language="en"),
+        SegmentEvent(
+            id="1", timestamp="00:00:01", speaker="Speaker 1", text="hi", language="en"
+        ),
         TranslationEvent(segment_id="1", text="hola", is_update=True),
         SummaryEvent(text="...", is_final=True),
         StatusEvent(state="error", message="boom"),

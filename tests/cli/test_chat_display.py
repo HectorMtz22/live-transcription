@@ -1,10 +1,13 @@
 """State checks for ChatDisplay — speaker side/color mapping + state dicts."""
+
 from live_transcribe_core import SegmentEvent, TranslationEvent
 from live_transcribe_cli.displays.chat import ChatDisplay
 
 
 def _seg(sid, speaker="Speaker 1", text="hello"):
-    return SegmentEvent(id=sid, timestamp="00:00:01", speaker=speaker, text=text, language="en")
+    return SegmentEvent(
+        id=sid, timestamp="00:00:01", speaker=speaker, text=text, language="en"
+    )
 
 
 def test_first_speaker_gets_left_side():
@@ -37,7 +40,9 @@ def test_translation_update_keeps_entry_index_when_live():
         d.on_segment(_seg("1"))
         d.on_translation(TranslationEvent(segment_id="1", text="hola"))
         idx = d._entry_map["1"]
-        d.on_translation(TranslationEvent(segment_id="1", text="hola mundo", is_update=True))
+        d.on_translation(
+            TranslationEvent(segment_id="1", text="hola mundo", is_update=True)
+        )
         assert d._entry_map["1"] == idx
     finally:
         d.stop()

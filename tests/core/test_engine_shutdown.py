@@ -4,6 +4,7 @@ The engine's _process_audio `finally:` block calls _flush_speech_buffer;
 stop() then waits on the pools. After stop(), the final segment MUST
 have been emitted.
 """
+
 import time
 
 from live_transcribe_core.config import VAD_FRAME_SAMPLES
@@ -19,7 +20,9 @@ def _drain_audio_queue(engine, timeout=2.0):
 
 
 def test_stop_flushes_in_progress_speech_buffer(
-    patched_engine, fake_whisper_result, speech_chunk,
+    patched_engine,
+    fake_whisper_result,
+    speech_chunk,
 ):
     """Push speech but NEVER enough silence to trigger a flush organically.
     stop() must still cause the final segment to be emitted.
@@ -43,7 +46,10 @@ def test_stop_flushes_in_progress_speech_buffer(
 
 
 def test_stop_joins_within_timeout_under_normal_load(
-    patched_engine, fake_whisper_result, speech_chunk, silence_chunk,
+    patched_engine,
+    fake_whisper_result,
+    speech_chunk,
+    silence_chunk,
 ):
     engine, _ = patched_engine(
         whisper_result=fake_whisper_result("ok", lang="en"),
@@ -62,7 +68,8 @@ def test_stop_joins_within_timeout_under_normal_load(
 
 
 def test_stop_emits_stopping_and_stopped_status(
-    patched_engine, fake_whisper_result,
+    patched_engine,
+    fake_whisper_result,
 ):
     engine, listener = patched_engine(
         whisper_result=fake_whisper_result("hi", lang="en"),

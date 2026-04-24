@@ -5,6 +5,7 @@ The engine is started (so _speaker_tracker, _translation_pool, VAD model
 are all set up), but we bypass the VAD loop entirely by invoking
 _transcribe_segment with a synthesized array.
 """
+
 import numpy as np
 
 from live_transcribe_core.config import SAMPLE_RATE

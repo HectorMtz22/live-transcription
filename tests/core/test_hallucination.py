@@ -7,6 +7,7 @@ Pinned behavior:
 - dominant repeated n-gram pattern → hallucination
 - genuine short phrases ≥ 2 tokens are NOT flagged
 """
+
 import pytest
 
 from live_transcribe_core.whisper import is_hallucination
@@ -18,13 +19,13 @@ from live_transcribe_core.whisper import is_hallucination
         "",
         "   ",
         "\n\n",
-        "thank you",                       # known phrase
-        "Thanks for watching!",            # case + trailing punct
-        "시청해 주셔서 감사합니다.",          # Korean known phrase, trailing period
-        "aaaa",                            # 1-char alphabet
-        "ababab",                          # 2-char alphabet
-        "la la la la",                     # unique_tokens <= 2, len >= 4
-        "the the the the the",             # dominant-token ratio > 70%
+        "thank you",  # known phrase
+        "Thanks for watching!",  # case + trailing punct
+        "시청해 주셔서 감사합니다.",  # Korean known phrase, trailing period
+        "aaaa",  # 1-char alphabet
+        "ababab",  # 2-char alphabet
+        "la la la la",  # unique_tokens <= 2, len >= 4
+        "the the the the the",  # dominant-token ratio > 70%
         "hello world foo hello world foo hello world foo",  # 3-gram repetition
     ],
 )

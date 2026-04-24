@@ -1,4 +1,5 @@
 """Coverage for live_transcribe_core.whisper.chunk_for_translation."""
+
 from live_transcribe_core.whisper import chunk_for_translation
 
 

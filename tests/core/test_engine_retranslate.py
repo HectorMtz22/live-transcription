@@ -5,6 +5,7 @@ differs from the stored value, the engine emits TranslationEvent(is_update=True)
 White-box approach: drive _transcribe_segment directly rather than through
 the VAD loop, so each call produces one distinct segment.
 """
+
 import time
 
 import numpy as np
@@ -26,7 +27,8 @@ def _drive_n(engine, n):
 
 
 def test_qwen_emits_is_update_true_when_retranslation_differs(
-    patched_engine, fake_whisper_result,
+    patched_engine,
+    fake_whisper_result,
 ):
     """Drive 4 segments. Initial translations: 'tr1'..'tr4'. Retranslations
     return different strings ('retr0'..'retr29'), so is_update=True events
@@ -40,10 +42,7 @@ def test_qwen_emits_is_update_true_when_retranslation_differs(
     # silent dummy to warm up Whisper; that call consumes the first list entry.
     whisper_results = [
         fake_whisper_result(text="warmup", lang="en"),  # absorbed by start()
-    ] + [
-        fake_whisper_result(text=f"sentence {i}", lang="en")
-        for i in range(1, 5)
-    ]
+    ] + [fake_whisper_result(text=f"sentence {i}", lang="en") for i in range(1, 5)]
 
     engine, listener = patched_engine(
         whisper_results=whisper_results,
@@ -66,7 +65,8 @@ def test_qwen_emits_is_update_true_when_retranslation_differs(
 
 
 def test_qwen_retranslate_skipped_when_translation_unchanged(
-    patched_engine, fake_whisper_result,
+    patched_engine,
+    fake_whisper_result,
 ):
     """If FakeQwen returns the SAME translation on the retranslate call, no
     is_update event should be emitted for that entry.
@@ -75,9 +75,7 @@ def test_qwen_retranslate_skipped_when_translation_unchanged(
     # Prepend a warmup result for the engine.start() warmup transcribe call.
     whisper_results = [
         fake_whisper_result(text="warmup", lang="en"),
-    ] + [
-        fake_whisper_result(text=f"line {i}", lang="en") for i in range(1, 5)
-    ]
+    ] + [fake_whisper_result(text=f"line {i}", lang="en") for i in range(1, 5)]
 
     engine, listener = patched_engine(
         whisper_results=whisper_results,

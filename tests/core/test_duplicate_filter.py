@@ -1,4 +1,5 @@
 """Coverage for live_transcribe_core.whisper.DuplicateFilter."""
+
 from live_transcribe_core.whisper import DuplicateFilter
 
 

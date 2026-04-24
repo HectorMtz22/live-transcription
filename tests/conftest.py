@@ -6,6 +6,7 @@ CRITICAL MONKEYPATCH RULE:
     engine.py creates a new binding in engine's namespace; patching
     `live_transcribe_core.whisper.transcribe` is silently ineffective.
 """
+
 from __future__ import annotations
 
 import threading
@@ -23,6 +24,7 @@ from live_transcribe_core.translators import QwenTranslator
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------
+
 
 class _FakeTensor:
     """Stub of a torch 0-d tensor — only needs .item()."""
@@ -183,34 +185,43 @@ class RecordingListener:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def silence_chunk():
     def _make(samples=512):
         return np.zeros(samples, dtype=np.float32)
+
     return _make
 
 
 @pytest.fixture
 def speech_chunk():
     """Sine wave with RMS well above ENERGY_THRESHOLD (0.002)."""
+
     def _make(samples=512, freq=440):
         t = np.arange(samples) / SAMPLE_RATE
         return (0.5 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+
     return _make
 
 
 @pytest.fixture
 def fake_whisper_result():
-    def _make(text="hello", lang="en", avg_logprob=-0.3, no_speech_prob=0.1, segments=None):
+    def _make(
+        text="hello", lang="en", avg_logprob=-0.3, no_speech_prob=0.1, segments=None
+    ):
         if segments is None:
-            segments = [{
-                "text": text,
-                "start": 0.0,
-                "end": 1.0,
-                "avg_logprob": avg_logprob,
-                "no_speech_prob": no_speech_prob,
-            }]
+            segments = [
+                {
+                    "text": text,
+                    "start": 0.0,
+                    "end": 1.0,
+                    "avg_logprob": avg_logprob,
+                    "no_speech_prob": no_speech_prob,
+                }
+            ]
         return {"language": lang, "segments": segments}
+
     return _make
 
 
@@ -244,9 +255,14 @@ def patched_engine(monkeypatch):
         diarize=False,
         target_lang="en",
     ):
-        results = list(whisper_results) if whisper_results else (
-            [whisper_result] if whisper_result is not None
-            else [{"language": "en", "segments": []}]
+        results = (
+            list(whisper_results)
+            if whisper_results
+            else (
+                [whisper_result]
+                if whisper_result is not None
+                else [{"language": "en", "segments": []}]
+            )
         )
 
         def fake_transcribe(audio, model_repo, initial_prompt, gpu_lock):

@@ -4,16 +4,16 @@ returns None when the underlying client raises.
 
 All external clients are mocked; no network calls, no model loads.
 """
+
 import sys
 import types
 from unittest.mock import MagicMock
-
-import pytest
 
 
 # ---------------------------------------------------------------------------
 # Google
 # ---------------------------------------------------------------------------
+
 
 def test_google_returns_string_from_underlying_client(monkeypatch):
     from live_transcribe_core.translators import google as gmod
@@ -30,6 +30,7 @@ def test_google_returns_string_from_underlying_client(monkeypatch):
 
 def test_google_returns_none_when_same_source_and_target(monkeypatch):
     from live_transcribe_core.translators import google as gmod
+
     monkeypatch.setattr(gmod, "TRANSLATION_AVAILABLE", True)
     t = gmod.GoogleTranslator(target_lang="en")
     assert t.translate("hello", "en") is None
@@ -53,6 +54,7 @@ def test_google_returns_none_on_persistent_failure(monkeypatch):
 # DeepL
 # ---------------------------------------------------------------------------
 
+
 def test_deepl_returns_string_from_underlying_client(monkeypatch):
     from live_transcribe_core.translators import deepl as dmod
 
@@ -65,6 +67,7 @@ def test_deepl_returns_string_from_underlying_client(monkeypatch):
 
 def test_deepl_returns_none_when_client_missing():
     from live_transcribe_core.translators import deepl as dmod
+
     t = dmod.DeepLTranslator(target_lang="es")
     t.client = None
     assert t.translate("hello", "en") is None
@@ -84,6 +87,7 @@ def test_deepl_returns_none_on_exception(monkeypatch):
 # Qwen
 # ---------------------------------------------------------------------------
 
+
 def test_qwen_returns_string_from_generate(monkeypatch):
     from live_transcribe_core.translators import qwen as qmod
 
@@ -92,6 +96,7 @@ def test_qwen_returns_string_from_generate(monkeypatch):
     t.target_lang = "es"
     t._cache = __import__("collections").OrderedDict()
     import threading
+
     t._lock = threading.Lock()
     t._gpu_lock = None
     t._model = object()  # truthy placeholder
@@ -110,6 +115,7 @@ def test_qwen_returns_string_from_generate(monkeypatch):
 
 def test_qwen_returns_none_when_unavailable():
     from live_transcribe_core.translators import qwen as qmod
+
     t = qmod.QwenTranslator.__new__(qmod.QwenTranslator)
     t._available = False
     t.target_lang = "es"
@@ -118,10 +124,12 @@ def test_qwen_returns_none_when_unavailable():
 
 def test_qwen_returns_none_on_exception(monkeypatch):
     from live_transcribe_core.translators import qwen as qmod
+
     t = qmod.QwenTranslator.__new__(qmod.QwenTranslator)
     t.target_lang = "es"
     t._cache = __import__("collections").OrderedDict()
     import threading
+
     t._lock = threading.Lock()
     t._gpu_lock = None
     t._model = object()
@@ -142,6 +150,7 @@ def test_qwen_returns_none_on_exception(monkeypatch):
 # NLLB
 # ---------------------------------------------------------------------------
 
+
 def test_nllb_returns_string_from_model(monkeypatch):
     from live_transcribe_core.translators import nllb as nmod
 
@@ -150,6 +159,7 @@ def test_nllb_returns_string_from_model(monkeypatch):
     t._tgt_code = nmod.NLLB_LANG_CODES["es"]
     t._cache = __import__("collections").OrderedDict()
     import threading
+
     t._lock = threading.Lock()
     t._available = True
 
@@ -166,6 +176,7 @@ def test_nllb_returns_string_from_model(monkeypatch):
 
 def test_nllb_returns_none_when_unavailable():
     from live_transcribe_core.translators import nllb as nmod
+
     t = nmod.NLLBTranslator.__new__(nmod.NLLBTranslator)
     t._available = False
     t.target_lang = "es"
@@ -174,6 +185,7 @@ def test_nllb_returns_none_when_unavailable():
 
 def test_nllb_returns_none_for_unsupported_source_lang():
     from live_transcribe_core.translators import nllb as nmod
+
     t = nmod.NLLBTranslator.__new__(nmod.NLLBTranslator)
     t._available = True
     t.target_lang = "es"
@@ -186,9 +198,13 @@ def test_nllb_returns_none_for_unsupported_source_lang():
 # Shared contract: every backend is a runtime-checkable Translator
 # ---------------------------------------------------------------------------
 
+
 def test_all_backends_satisfy_translator_protocol():
     from live_transcribe_core.translators import (
-        DeepLTranslator, GoogleTranslator, NLLBTranslator, QwenTranslator,
+        DeepLTranslator,
+        GoogleTranslator,
+        NLLBTranslator,
+        QwenTranslator,
         Translator,
     )
 

@@ -3,6 +3,7 @@
 Spec: only QwenTranslator defines .set_gpu_lock(). Google/DeepL/NLLB
 must be safely ignored — no attribute added, no exception.
 """
+
 import threading
 
 from live_transcribe_core.translators import (
@@ -23,7 +24,9 @@ def test_qwen_supports_gpu_lock():
 def test_other_backends_do_not_support_gpu_lock():
     for cls in (GoogleTranslator, DeepLTranslator, NLLBTranslator):
         t = cls.__new__(cls)
-        assert supports_gpu_lock(t) is False, f"{cls.__name__} unexpectedly has set_gpu_lock"
+        assert supports_gpu_lock(t) is False, (
+            f"{cls.__name__} unexpectedly has set_gpu_lock"
+        )
 
 
 def test_set_gpu_lock_on_qwen_installs_lock():
