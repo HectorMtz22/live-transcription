@@ -25,6 +25,7 @@ class BaseDisplay(EngineListener):
         # can re-render a previously printed line.
         self._segments: dict[str, SegmentEvent] = {}
         self.translations: dict[str, str] = {}
+        self.summaries: list[SummaryEvent] = []
         self._lock = threading.Lock()
 
     # EngineListener --------------------------------------------------------
@@ -53,6 +54,8 @@ class BaseDisplay(EngineListener):
             self._render_segment_without_translation(seg)
 
     def on_summary(self, event: SummaryEvent) -> None:
+        with self._lock:
+            self.summaries.append(event)
         self._render_summary(event)
 
     def on_status(self, event: StatusEvent) -> None:
@@ -83,7 +86,8 @@ class BaseDisplay(EngineListener):
         raise NotImplementedError
 
     def _render_summary(self, event: SummaryEvent) -> None:
-        header = "FINAL SUMMARY" if event.is_final else "SUMMARY"
+        tag = f"FINAL SUMMARY #{event.index}" if event.is_final else f"SUMMARY #{event.index}"
+        header = f"{tag} · {event.timestamp}"
         print(f"\n\033[1;35m{'─' * 40}")
         print(f"  {header}")
         print(f"{'─' * 40}\033[0m")

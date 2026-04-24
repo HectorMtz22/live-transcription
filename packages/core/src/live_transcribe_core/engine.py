@@ -128,8 +128,13 @@ class TranscriptionEngine:
         if self._config.enable_summary:
             self._summarizer = SummarizerProcess(
                 target_lang=self._config.target_lang,
-                on_summary=lambda text: self._listener.on_summary(
-                    SummaryEvent(text=text)
+                on_summary=lambda item: self._listener.on_summary(
+                    SummaryEvent(
+                        index=item["index"],
+                        timestamp=item["timestamp"],
+                        text=item["text"],
+                        is_final=item["is_final"],
+                    )
                 ),
             )
             self._summarizer.start()
@@ -166,9 +171,7 @@ class TranscriptionEngine:
         if self._translation_pool is not None:
             self._translation_pool.shutdown(wait=True, cancel_futures=False)
         if self._summarizer is not None:
-            final = self._summarizer.stop()
-            if final:
-                self._listener.on_summary(SummaryEvent(text=final, is_final=True))
+            self._summarizer.stop()
         self._listener.on_status(StatusEvent("stopped"))
 
     def get_transcript(self) -> list[SegmentEvent]:
