@@ -44,7 +44,6 @@ from live_transcribe_core.speaker import SpeakerTracker
 from live_transcribe_core.summarizer import SummarizerProcess
 from live_transcribe_core.translators import (
     QwenTranslator,
-    set_gpu_lock as _inject_gpu_lock,
 )
 from live_transcribe_core.vad import load_vad_model
 from live_transcribe_core.whisper import (
@@ -75,8 +74,6 @@ class TranscriptionEngine:
         self._speaker_tracker: Optional[SpeakerTracker] = None
         self._vad_model = None
         self._summarizer: Optional[SummarizerProcess] = None
-
-        self._gpu_lock = threading.Lock()
 
         self._transcription_pool: Optional[ThreadPoolExecutor] = None
         self._translation_pool: Optional[ThreadPoolExecutor] = None
@@ -112,11 +109,14 @@ class TranscriptionEngine:
         self._speaker_tracker = SpeakerTracker(enabled=self._config.diarize)
         self._vad_model = load_vad_model()
 
-        # Inject the GPU lock into any translator that needs it (Qwen).
-        if self._config.translator is not None:
-            _inject_gpu_lock(self._config.translator, self._gpu_lock)
+        # Wire the engine's listener to Qwen status events (crash, restart, degraded).
+        if isinstance(self._config.translator, QwenTranslator):
+            translator = self._config.translator
+            translator._on_status = lambda state, message: self._listener.on_status(
+                StatusEvent(state=state, message=message)
+            )
 
-        # Thread pools: Qwen serializes on GPU so 1 translation worker is enough.
+        # Thread pools: Qwen IPC is sequential per child so 1 translation worker is enough.
         self._transcription_pool = ThreadPoolExecutor(max_workers=1)
         translation_workers = 1 if isinstance(self._config.translator, QwenTranslator) else 4
         self._translation_pool = (
@@ -146,7 +146,6 @@ class TranscriptionEngine:
             dummy,
             model_repo=self._config.whisper_model,
             initial_prompt=None,
-            gpu_lock=self._gpu_lock,
         )
 
         self._running = True
@@ -171,6 +170,8 @@ class TranscriptionEngine:
             self._transcription_pool.shutdown(wait=True, cancel_futures=False)
         if self._translation_pool is not None:
             self._translation_pool.shutdown(wait=True, cancel_futures=False)
+        if isinstance(self._config.translator, QwenTranslator):
+            self._config.translator.stop()
         if self._summarizer is not None:
             self._summarizer.stop()
         self._listener.on_status(StatusEvent("stopped"))
@@ -294,7 +295,6 @@ class TranscriptionEngine:
                 audio_data,
                 model_repo=self._config.whisper_model,
                 initial_prompt=initial_prompt,
-                gpu_lock=self._gpu_lock,
             )
 
             lang = result.get("language", "??")
@@ -422,27 +422,31 @@ class TranscriptionEngine:
         if not candidates:
             return
 
+        translator = self._config.translator
+        # Only QwenTranslator exposes retranslate_batch; this method is only
+        # submitted when isinstance(translator, QwenTranslator).
+        items = [(entry["text"], entry["language"]) for _, entry in candidates]
         context = list(self._recent_context)
-        for _idx, entry in candidates:
-            try:
-                new_translation = self._config.translator.translate(
-                    entry["text"], entry["language"], context=context
-                )
-            except Exception:
+        try:
+            results = translator.retranslate_batch(items, context=context)
+        except Exception:
+            return
+
+        for (_idx, entry), new_translation in zip(candidates, results):
+            if not new_translation or new_translation == entry["translation"]:
                 continue
+            old_translation = entry["translation"]
+            entry["translation"] = new_translation
 
-            if new_translation and new_translation != entry["translation"]:
-                old_translation = entry["translation"]
-                entry["translation"] = new_translation
+            # Safe without locking: transcription_pool (1 worker) and
+            # translation_pool (1 worker for Qwen) serialize writers.
+            for j, (orig, trans) in enumerate(self._recent_context):
+                if orig == entry["text"] and trans == old_translation:
+                    self._recent_context[j] = (orig, new_translation)
+                    break
 
-                # Safe without locking: transcription_pool (1 worker) and translation_pool (1 worker for Qwen) serialize writers.
-                for j, (orig, trans) in enumerate(self._recent_context):
-                    if orig == entry["text"] and trans == old_translation:
-                        self._recent_context[j] = (orig, new_translation)
-                        break
-
-                self._listener.on_translation(TranslationEvent(
-                    segment_id=entry["id"],
-                    text=new_translation,
-                    is_update=True,
-                ))
+            self._listener.on_translation(TranslationEvent(
+                segment_id=entry["id"],
+                text=new_translation,
+                is_update=True,
+            ))
