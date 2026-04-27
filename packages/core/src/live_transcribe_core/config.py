@@ -54,3 +54,7 @@ HALLUCINATION_PHRASES = {
     "gracias por ver", "suscríbete",
     "MBC 뉴스", "KBS 뉴스",
 }
+
+# Backpressure: maximum number of audio segments queued for transcription
+# before _submit_transcription drops new segments and emits a warning.
+MAX_PENDING_SEGMENTS = 4

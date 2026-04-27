@@ -24,6 +24,7 @@ from live_transcribe_core.config import (
     DEFAULT_WHISPER_MODEL,
     ENERGY_THRESHOLD,
     INITIAL_PROMPTS,
+    MAX_PENDING_SEGMENTS,
     MAX_SPEECH_DURATION,
     MIN_SPEECH_DURATION,
     SAMPLE_RATE,
@@ -198,6 +199,12 @@ class TranscriptionEngine:
 
     def _submit_transcription(self, audio_data):
         with self._pending_lock:
+            if self._pending_count >= MAX_PENDING_SEGMENTS:
+                self._listener.on_status(StatusEvent(
+                    state="warning",
+                    message=f"Audio dropped: transcription backlog ({self._pending_count} pending)",
+                ))
+                return
             self._pending_count += 1
         fut = self._transcription_pool.submit(self._transcribe_segment, audio_data)
         fut.add_done_callback(lambda _f: self._dec_pending())
