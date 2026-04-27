@@ -6,6 +6,7 @@ translator + summarizer, and emits events through an EngineListener.
 Architecture note: events are emitted synchronously from worker threads.
 Listener implementations MUST be thread-safe.
 """
+
 from __future__ import annotations
 
 import threading
@@ -118,7 +119,9 @@ class TranscriptionEngine:
 
         # Thread pools: Qwen IPC is sequential per child so 1 translation worker is enough.
         self._transcription_pool = ThreadPoolExecutor(max_workers=1)
-        translation_workers = 1 if isinstance(self._config.translator, QwenTranslator) else 4
+        translation_workers = (
+            1 if isinstance(self._config.translator, QwenTranslator) else 4
+        )
         self._translation_pool = (
             ThreadPoolExecutor(max_workers=translation_workers)
             if self._config.translator is not None
@@ -149,9 +152,7 @@ class TranscriptionEngine:
         )
 
         self._running = True
-        self._process_thread = threading.Thread(
-            target=self._process_audio, daemon=True
-        )
+        self._process_thread = threading.Thread(target=self._process_audio, daemon=True)
         self._process_thread.start()
 
         self._listener.on_status(StatusEvent("ready"))
@@ -201,10 +202,12 @@ class TranscriptionEngine:
     def _submit_transcription(self, audio_data):
         with self._pending_lock:
             if self._pending_count >= MAX_PENDING_SEGMENTS:
-                self._listener.on_status(StatusEvent(
-                    state="warning",
-                    message=f"Audio dropped: transcription backlog ({self._pending_count} pending)",
-                ))
+                self._listener.on_status(
+                    StatusEvent(
+                        state="warning",
+                        message=f"Audio dropped: transcription backlog ({self._pending_count} pending)",
+                    )
+                )
                 return
             self._pending_count += 1
         fut = self._transcription_pool.submit(self._transcribe_segment, audio_data)
@@ -230,7 +233,7 @@ class TranscriptionEngine:
         if duration < MIN_SPEECH_DURATION:
             return
 
-        rms = np.sqrt(np.mean(audio_data ** 2))
+        rms = np.sqrt(np.mean(audio_data**2))
         if rms < ENERGY_THRESHOLD:
             return
 
@@ -252,7 +255,7 @@ class TranscriptionEngine:
                 raw_audio = np.concatenate(chunks)
                 offset = 0
                 while offset + VAD_FRAME_SAMPLES <= len(raw_audio):
-                    frame = raw_audio[offset:offset + VAD_FRAME_SAMPLES]
+                    frame = raw_audio[offset : offset + VAD_FRAME_SAMPLES]
                     offset += VAD_FRAME_SAMPLES
 
                     frame_tensor = torch.from_numpy(frame).float()
@@ -346,18 +349,23 @@ class TranscriptionEngine:
                     self._transcript.append(entry)
                 self._last_speaker = speaker
 
-                self._listener.on_segment(SegmentEvent(
-                    id=entry_id,
-                    timestamp=timestamp,
-                    speaker=speaker,
-                    text=full_text,
-                    language=lang,
-                ))
+                self._listener.on_segment(
+                    SegmentEvent(
+                        id=entry_id,
+                        timestamp=timestamp,
+                        speaker=speaker,
+                        text=full_text,
+                        language=lang,
+                    )
+                )
 
                 if self._summarizer is not None:
                     self._summarizer.add_line(speaker, full_text, lang)
 
-                if self._config.translator is not None and lang in self._config.translate_langs:
+                if (
+                    self._config.translator is not None
+                    and lang in self._config.translate_langs
+                ):
                     context = list(self._recent_context) or None
 
                     if isinstance(self._config.translator, QwenTranslator):
@@ -369,13 +377,18 @@ class TranscriptionEngine:
                         futures = []
                         for i, chunk_text in enumerate(chunks):
                             chunk_ctx = (
-                                context if i == 0
+                                context
+                                if i == 0
                                 else (context or []) + [(c, None) for c in chunks[:i]]
                             )
-                            futures.append(self._translation_pool.submit(
-                                self._config.translator.translate,
-                                chunk_text, lang, context=chunk_ctx,
-                            ))
+                            futures.append(
+                                self._translation_pool.submit(
+                                    self._config.translator.translate,
+                                    chunk_text,
+                                    lang,
+                                    context=chunk_ctx,
+                                )
+                            )
                         all_translations = []
                         for future in futures:
                             try:
@@ -384,33 +397,42 @@ class TranscriptionEngine:
                                     all_translations.append(t)
                             except Exception:
                                 pass
-                        full_translation = " ".join(all_translations) if all_translations else None
+                        full_translation = (
+                            " ".join(all_translations) if all_translations else None
+                        )
 
                     entry["translation"] = full_translation
-                    self._listener.on_translation(TranslationEvent(
-                        segment_id=entry_id,
-                        text=full_translation or "",
-                        is_update=False,
-                    ))
+                    self._listener.on_translation(
+                        TranslationEvent(
+                            segment_id=entry_id,
+                            text=full_translation or "",
+                            is_update=False,
+                        )
+                    )
                     self._recent_context.append((full_text, full_translation))
 
-                    if isinstance(self._config.translator, QwenTranslator) and self._translation_pool is not None:
+                    if (
+                        isinstance(self._config.translator, QwenTranslator)
+                        and self._translation_pool is not None
+                    ):
                         self._translation_pool.submit(self._retranslate_recent, lang)
                 else:
                     # Translator configured but this language isn't in translate_langs —
                     # emit an empty TranslationEvent so the display renders the segment
                     # without waiting for a translation that will never arrive.
                     if self._config.translator is not None:
-                        self._listener.on_translation(TranslationEvent(
-                            segment_id=entry_id,
-                            text="",
-                            is_update=False,
-                        ))
+                        self._listener.on_translation(
+                            TranslationEvent(
+                                segment_id=entry_id,
+                                text="",
+                                is_update=False,
+                            )
+                        )
                     self._recent_context.append((full_text, None))
         except Exception as e:
-            self._listener.on_status(StatusEvent(
-                state="error", message=f"Transcription failed: {e}"
-            ))
+            self._listener.on_status(
+                StatusEvent(state="error", message=f"Transcription failed: {e}")
+            )
 
     def _retranslate_recent(self, source_lang):
         with self._transcript_lock:
@@ -445,8 +467,10 @@ class TranscriptionEngine:
                     self._recent_context[j] = (orig, new_translation)
                     break
 
-            self._listener.on_translation(TranslationEvent(
-                segment_id=entry["id"],
-                text=new_translation,
-                is_update=True,
-            ))
+            self._listener.on_translation(
+                TranslationEvent(
+                    segment_id=entry["id"],
+                    text=new_translation,
+                    is_update=True,
+                )
+            )

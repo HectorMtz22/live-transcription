@@ -1,4 +1,5 @@
 """Common Translator protocol shared by all translation backends."""
+
 from __future__ import annotations
 
 from typing import Optional, Protocol, runtime_checkable

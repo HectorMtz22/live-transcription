@@ -13,6 +13,7 @@ Crash handling:
   translator enters degraded mode and all calls return None for the rest of
   the session.
 """
+
 from __future__ import annotations
 
 import multiprocessing as mp
@@ -39,14 +40,15 @@ LANG_NAMES = {
     "es": "Spanish",
 }
 
-TRANSLATE_TIMEOUT = 30.0           # seconds, per single translate call
-RETRANSLATE_BATCH_TIMEOUT = 90.0   # seconds, per batch call
-RESTART_COOLDOWN = 60.0            # seconds; second crash inside this window → degraded
+TRANSLATE_TIMEOUT = 30.0  # seconds, per single translate call
+RETRANSLATE_BATCH_TIMEOUT = 90.0  # seconds, per batch call
+RESTART_COOLDOWN = 60.0  # seconds; second crash inside this window → degraded
 
 
 # ---------------------------------------------------------------------------
 # Shared prompt builder (runs in the child).
 # ---------------------------------------------------------------------------
+
 
 def _build_translate_prompt(text: str, source_lang: str, target_lang: str, context):
     """Build the chat-template-formatted prompt for a single translation."""
@@ -85,6 +87,7 @@ def _build_translate_prompt(text: str, source_lang: str, target_lang: str, conte
 # Child-process worker.
 # ---------------------------------------------------------------------------
 
+
 def _worker(request_q: "mp.Queue", reply_q: "mp.Queue", model_repo: str):
     """Child process entry point. Loads the model and serves requests until None."""
     from mlx_lm import generate, load
@@ -93,16 +96,21 @@ def _worker(request_q: "mp.Queue", reply_q: "mp.Queue", model_repo: str):
     model, tokenizer = load(model_repo)
     print("[QwenProcess] Model ready.", flush=True)
 
-    def _generate_one(text: str, source_lang: str, target_lang: str, context) -> Optional[str]:
+    def _generate_one(
+        text: str, source_lang: str, target_lang: str, context
+    ) -> Optional[str]:
         try:
             prompt = _build_translate_prompt(text, source_lang, target_lang, context)
             messages = [{"role": "user", "content": prompt}]
             formatted = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True,
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
                 enable_thinking=False,
             )
             result = generate(
-                model, tokenizer,
+                model,
+                tokenizer,
                 prompt=formatted,
                 max_tokens=512,
                 verbose=False,
@@ -124,7 +132,9 @@ def _worker(request_q: "mp.Queue", reply_q: "mp.Queue", model_repo: str):
             if item.source_lang == item.target_lang:
                 reply_q.put(TranslateReply(request_id=item.request_id, result=None))
                 continue
-            result = _generate_one(item.text, item.source_lang, item.target_lang, item.context)
+            result = _generate_one(
+                item.text, item.source_lang, item.target_lang, item.context
+            )
             reply_q.put(TranslateReply(request_id=item.request_id, result=result))
         elif isinstance(item, RetranslateBatchRequest):
             results = []
@@ -132,14 +142,19 @@ def _worker(request_q: "mp.Queue", reply_q: "mp.Queue", model_repo: str):
                 if source_lang == item.target_lang:
                     results.append(None)
                     continue
-                results.append(_generate_one(text, source_lang, item.target_lang, item.context))
-            reply_q.put(RetranslateBatchReply(request_id=item.request_id, results=results))
+                results.append(
+                    _generate_one(text, source_lang, item.target_lang, item.context)
+                )
+            reply_q.put(
+                RetranslateBatchReply(request_id=item.request_id, results=results)
+            )
         # Unknown message types are silently dropped.
 
 
 # ---------------------------------------------------------------------------
 # Parent-process facade.
 # ---------------------------------------------------------------------------
+
 
 class QwenTranslator:
     """Subprocess-backed Qwen translator with LRU cache and auto-restart."""
@@ -285,9 +300,14 @@ class QwenTranslator:
                 return
 
             now = time.monotonic()
-            if self._last_restart_at is not None and (now - self._last_restart_at) < RESTART_COOLDOWN:
+            if (
+                self._last_restart_at is not None
+                and (now - self._last_restart_at) < RESTART_COOLDOWN
+            ):
                 self._degraded = True
-                self._emit("error", "Qwen translator crashed twice; disabled for this session")
+                self._emit(
+                    "error", "Qwen translator crashed twice; disabled for this session"
+                )
                 return
 
             self._emit("warning", "Qwen translator crashed, restarting…")

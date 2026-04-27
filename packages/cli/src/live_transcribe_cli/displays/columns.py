@@ -1,4 +1,5 @@
 """Column-based display — subscribes to EngineListener events."""
+
 from __future__ import annotations
 
 from rich.cells import cell_len
@@ -16,7 +17,7 @@ class ColumnsDisplay(BaseDisplay):
     def __init__(self, has_translator: bool):
         super().__init__(has_translator=has_translator)
         self._entries: list = []
-        self._entry_map: dict[str, int] = {}   # segment_id -> index in self._entries
+        self._entry_map: dict[str, int] = {}  # segment_id -> index in self._entries
         self._live = None
         self._max_entries = max(5, (console.height - 5) // 3)
 
@@ -135,7 +136,9 @@ class ColumnsDisplay(BaseDisplay):
         pad = width - cell_len(text)
         return text + " " * max(pad, 0)
 
-    def _render_columns(self, left_str, right_str, left_style="white", right_style="yellow"):
+    def _render_columns(
+        self, left_str, right_str, left_style="white", right_style="yellow"
+    ):
         _, indent, left_w, right_w = self._get_col_widths()
         left_lines = self._wrap_display(left_str, left_w)
         right_lines = self._wrap_display(right_str, right_w)
