@@ -7,7 +7,6 @@ batch offline transcription later).
 from __future__ import annotations
 
 import re
-import threading
 from collections import Counter, deque
 from typing import Optional
 
@@ -133,17 +132,15 @@ def transcribe(
     audio: np.ndarray,
     model_repo: str,
     initial_prompt: Optional[str],
-    gpu_lock: threading.Lock,
 ) -> dict:
-    """Run mlx-whisper under gpu_lock with the engine's standard parameters."""
-    with gpu_lock:
-        return mlx_whisper.transcribe(
-            audio,
-            path_or_hf_repo=model_repo,
-            initial_prompt=initial_prompt,
-            temperature=(0.0, 0.2, 0.4),
-            condition_on_previous_text=False,
-            compression_ratio_threshold=1.8,
-            logprob_threshold=-1.0,
-            no_speech_threshold=0.6,
-        )
+    """Run mlx-whisper with the engine's standard parameters."""
+    return mlx_whisper.transcribe(
+        audio,
+        path_or_hf_repo=model_repo,
+        initial_prompt=initial_prompt,
+        temperature=(0.0, 0.2, 0.4),
+        condition_on_previous_text=False,
+        compression_ratio_threshold=1.8,
+        logprob_threshold=-1.0,
+        no_speech_threshold=0.6,
+    )
