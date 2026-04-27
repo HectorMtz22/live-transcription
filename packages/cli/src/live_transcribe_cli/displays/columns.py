@@ -143,9 +143,9 @@ class ColumnsDisplay(BaseDisplay):
         left_lines += [""] * (n - len(left_lines))
         right_lines += [""] * (n - len(right_lines))
         result = Text()
-        for i, (l, r) in enumerate(zip(left_lines, right_lines)):
+        for i, (left, r) in enumerate(zip(left_lines, right_lines)):
             result.append(" " * indent)
-            result.append(self._pad_display(l, left_w), style=left_style)
+            result.append(self._pad_display(left, left_w), style=left_style)
             result.append(" │ ", style="dim")
             result.append(r, style=right_style)
             if i < n - 1:
