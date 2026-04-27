@@ -36,7 +36,7 @@ class SummaryEvent:
 
 @dataclass(frozen=True)
 class StatusEvent:
-    state: Literal["starting", "ready", "stopping", "stopped", "error"]
+    state: Literal["starting", "ready", "stopping", "stopped", "error", "warning", "info"]
     message: Optional[str] = None
 
 

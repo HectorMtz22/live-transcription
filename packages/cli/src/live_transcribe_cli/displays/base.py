@@ -59,7 +59,7 @@ class BaseDisplay(EngineListener):
         self._render_summary(event)
 
     def on_status(self, event: StatusEvent) -> None:
-        if event.state == "error" and event.message:
+        if event.state in ("error", "warning") and event.message:
             self._render_error(event.message)
 
     # Lifecycle (display-specific) ------------------------------------------
