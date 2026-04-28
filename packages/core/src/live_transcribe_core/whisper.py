@@ -4,10 +4,10 @@ These are pure (or nearly-pure) utilities that don't hold engine state,
 so they live at module level and can be reused independently (e.g., for
 batch offline transcription later).
 """
+
 from __future__ import annotations
 
 import re
-import threading
 from collections import Counter, deque
 from typing import Optional
 
@@ -73,7 +73,7 @@ def is_hallucination(text: str) -> bool:
     if most_common_count / len(tokens) > 0.7 and len(tokens) >= 4:
         return True
     for n in range(2, min(len(tokens) // 2 + 1, 8)):
-        ngrams = [tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)]
+        ngrams = [tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)]
         ngram_counts = Counter(ngrams)
         most_common_ngram, mc_count = ngram_counts.most_common(1)[0]
         if mc_count >= 3 and (mc_count * len(most_common_ngram)) / len(tokens) > 0.5:
@@ -105,12 +105,12 @@ class DuplicateFilter:
 
 def chunk_for_translation(text: str, max_chunk_len: int = 120) -> list[str]:
     """Sentence-level chunking for translation (keeps delimiters attached)."""
-    sentence_pattern = r'(?<=[.!?。？！\n])\s*'
+    sentence_pattern = r"(?<=[.!?。？！\n])\s*"
     sentences = re.split(sentence_pattern, text)
     sentences = [s.strip() for s in sentences if s.strip()]
 
     if len(sentences) == 1 and len(sentences[0]) > max_chunk_len:
-        clause_pattern = r'(?<=[,;:，；、])\s*'
+        clause_pattern = r"(?<=[,;:，；、])\s*"
         sentences = re.split(clause_pattern, text)
         sentences = [s.strip() for s in sentences if s.strip()]
 
@@ -133,17 +133,15 @@ def transcribe(
     audio: np.ndarray,
     model_repo: str,
     initial_prompt: Optional[str],
-    gpu_lock: threading.Lock,
 ) -> dict:
-    """Run mlx-whisper under gpu_lock with the engine's standard parameters."""
-    with gpu_lock:
-        return mlx_whisper.transcribe(
-            audio,
-            path_or_hf_repo=model_repo,
-            initial_prompt=initial_prompt,
-            temperature=(0.0, 0.2, 0.4),
-            condition_on_previous_text=False,
-            compression_ratio_threshold=1.8,
-            logprob_threshold=-1.0,
-            no_speech_threshold=0.6,
-        )
+    """Run mlx-whisper with the engine's standard parameters."""
+    return mlx_whisper.transcribe(
+        audio,
+        path_or_hf_repo=model_repo,
+        initial_prompt=initial_prompt,
+        temperature=(0.0, 0.2, 0.4),
+        condition_on_previous_text=False,
+        compression_ratio_threshold=1.8,
+        logprob_threshold=-1.0,
+        no_speech_threshold=0.6,
+    )
