@@ -3,6 +3,7 @@
 Tracks the per-segment speaker-change + translation-update state so each
 display subclass can focus on rendering.
 """
+
 from __future__ import annotations
 
 import threading
@@ -59,7 +60,7 @@ class BaseDisplay(EngineListener):
         self._render_summary(event)
 
     def on_status(self, event: StatusEvent) -> None:
-        if event.state == "error" and event.message:
+        if event.state in ("error", "warning") and event.message:
             self._render_error(event.message)
 
     # Lifecycle (display-specific) ------------------------------------------
@@ -86,7 +87,11 @@ class BaseDisplay(EngineListener):
         raise NotImplementedError
 
     def _render_summary(self, event: SummaryEvent) -> None:
-        tag = f"FINAL SUMMARY #{event.index}" if event.is_final else f"SUMMARY #{event.index}"
+        tag = (
+            f"FINAL SUMMARY #{event.index}"
+            if event.is_final
+            else f"SUMMARY #{event.index}"
+        )
         header = f"{tag} · {event.timestamp}"
         print(f"\n\033[1;35m{'─' * 40}")
         print(f"  {header}")

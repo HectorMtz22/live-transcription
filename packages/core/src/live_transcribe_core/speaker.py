@@ -112,7 +112,7 @@ class SpeakerTracker:
                 return best_match
             return self._last_speaker_label()
 
-        except Exception as e:
+        except Exception:
             return self._last_speaker_label()
 
     def _last_speaker_label(self):
