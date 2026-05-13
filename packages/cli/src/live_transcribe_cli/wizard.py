@@ -193,7 +193,8 @@ def _device_name(devices: list[tuple[int, str]], idx: int) -> str:
 
 
 def _render_review(values: dict, devices: list[tuple[int, str]], locked: set[str],
-                   model_repo: str, diarize: bool) -> None:
+                   model_repo: str, diarize: bool,
+                   title: str = "Ready to start") -> None:
     """Print the review summary via Rich panel."""
     table = Table.grid(padding=(0, 1))
     table.add_column(style="bold cyan", no_wrap=True)
@@ -237,7 +238,7 @@ def _render_review(values: dict, devices: list[tuple[int, str]], locked: set[str
     Console().print(
         Panel(
             table,
-            title="[bold cyan]Ready to start[/]",
+            title=f"[bold cyan]{title}[/]",
             border_style="cyan",
             padding=(1, 2),
         )
@@ -294,6 +295,53 @@ def _edit_single(field: str, values: dict, devices: list[tuple[int, str]]) -> No
         r = pickers.pick_summary(values["summary"], show_back=True)
         if r is not pickers.BACK:
             values["summary"] = r
+
+
+def build_from_last_run(
+    args, last_run: dict | None, devices: list[tuple[int, str]]
+) -> Choices | None:
+    """Build Choices directly from a saved last_run record + CLI overrides.
+
+    Skips the interactive wizard. Returns None if last_run is missing — caller
+    is expected to fall back to the wizard with a user-facing notice.
+    """
+    if last_run is None:
+        return None
+
+    values = _seed_defaults(args, last_run)
+    values["device_idx"] = _resolve_device_default(last_run, devices)
+    if args.device is not None:
+        values["device_idx"] = args.device
+
+    if isinstance(values.get("translate_from"), set) and isinstance(
+        values.get("translate_to"), str
+    ):
+        values["translate_from"] = values["translate_from"] - {values["translate_to"]}
+
+    return Choices(
+        device_idx=values["device_idx"],
+        translator=values["translator"],
+        translate_from=values["translate_from"] if values["translator"] != "none" else set(),
+        translate_to=values["translate_to"],
+        display=values["display"],
+        summary=values["summary"],
+    )
+
+
+def render_summary(choices: Choices, *, model_repo: str, diarize: bool,
+                   title: str = "Continuing with last session") -> None:
+    """Render a read-only summary panel for the --continue path."""
+    devices = _input_devices()
+    values = {
+        "device_idx": choices.device_idx,
+        "translator": choices.translator,
+        "translate_from": choices.translate_from,
+        "translate_to": choices.translate_to,
+        "display": choices.display,
+        "summary": choices.summary,
+    }
+    _render_review(values, devices, locked=set(), model_repo=model_repo,
+                   diarize=diarize, title=title)
 
 
 def run(args, last_run: dict | None, *, model_repo: str, diarize: bool) -> Choices | None:
