@@ -95,21 +95,27 @@ def test_qwen_retranslate_skipped_when_translation_unchanged(
     assert updates == []
 
 
-def test_qwen_gpu_lock_injected_at_start(
+def test_qwen_on_status_callback_wired_at_start(
     patched_engine, fake_whisper_result, fake_qwen_translator
 ):
-    """Engine.start() calls translators.set_gpu_lock(translator, self._gpu_lock)
-    when the translator exposes set_gpu_lock. FakeQwenTranslator records it.
+    """Engine.start() must install an _on_status callback on a QwenTranslator
+    so the translator's watchdog can report crashes via the listener.
     """
     translator = fake_qwen_translator()
-    engine, _ = patched_engine(
+    assert translator._on_status is None  # nothing wired before start
+
+    engine, listener = patched_engine(
         whisper_result=fake_whisper_result("hi", lang="en"),
         translator=translator,
         translate_langs=["en"],
     )
     engine.start()
     try:
-        assert len(translator.set_gpu_lock_calls) == 1
-        assert translator.set_gpu_lock_calls[0] is engine._gpu_lock
+        assert callable(translator._on_status)
+        translator._on_status("warning", "test message")
+        statuses = listener.events("status")
+        assert any(
+            s.state == "warning" and s.message == "test message" for s in statuses
+        )
     finally:
         engine.stop()

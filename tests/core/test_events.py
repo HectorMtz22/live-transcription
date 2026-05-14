@@ -31,7 +31,7 @@ def test_translation_event_default_is_update_is_false():
 
 
 def test_summary_event_default_is_final_is_false():
-    e = SummaryEvent(text="...")
+    e = SummaryEvent(index=1, timestamp="00:00:00", text="...")
     assert e.is_final is False
 
 
@@ -46,7 +46,7 @@ def test_events_asdict_is_json_serializable():
             id="1", timestamp="00:00:01", speaker="Speaker 1", text="hi", language="en"
         ),
         TranslationEvent(segment_id="1", text="hola", is_update=True),
-        SummaryEvent(text="...", is_final=True),
+        SummaryEvent(index=1, timestamp="00:00:01", text="...", is_final=True),
         StatusEvent(state="error", message="boom"),
     ]
     for evt in evts:

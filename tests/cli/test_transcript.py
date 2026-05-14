@@ -14,7 +14,7 @@ def _seg(sid, speaker, text, lang="en", ts="00:00:00"):
 
 
 def test_empty_segments_returns_empty_paths(tmp_path):
-    orig, trans = save_transcript(
+    orig, trans, summaries = save_transcript(
         segments=[],
         translations={},
         target_lang="es",
@@ -22,11 +22,12 @@ def test_empty_segments_returns_empty_paths(tmp_path):
     )
     assert orig == ""
     assert trans is None
+    assert summaries is None
 
 
 def test_original_file_is_always_written_when_segments_present(tmp_path):
     segs = [_seg("1", "Speaker 1", "hello")]
-    orig, trans = save_transcript(
+    orig, trans, _summaries = save_transcript(
         segments=segs,
         translations={},
         target_lang="es",
@@ -41,7 +42,7 @@ def test_original_file_is_always_written_when_segments_present(tmp_path):
 
 def test_translated_file_written_when_translations_non_empty(tmp_path):
     segs = [_seg("1", "Speaker 1", "hello")]
-    orig, trans = save_transcript(
+    orig, trans, _summaries = save_transcript(
         segments=segs,
         translations={"1": "hola"},
         target_lang="es",
@@ -53,7 +54,7 @@ def test_translated_file_written_when_translations_non_empty(tmp_path):
 
 def test_translated_file_suffix_matches_target_lang_name(tmp_path):
     segs = [_seg("1", "Speaker 1", "hello")]
-    _, trans = save_transcript(
+    _orig, trans, _summaries = save_transcript(
         segs,
         {"1": "안녕"},
         target_lang="ko",
@@ -64,7 +65,7 @@ def test_translated_file_suffix_matches_target_lang_name(tmp_path):
 
 def test_missing_translation_falls_back_to_original_text(tmp_path):
     segs = [_seg("1", "Speaker 1", "hello"), _seg("2", "Speaker 1", "world")]
-    _, trans = save_transcript(
+    _orig, trans, _summaries = save_transcript(
         segs,
         {"1": "hola"},  # no translation for segment 2
         target_lang="es",
@@ -81,7 +82,9 @@ def test_speaker_changes_produce_new_headers(tmp_path):
         _seg("2", "Speaker 2", "hi", ts="00:00:02"),
         _seg("3", "Speaker 2", "there", ts="00:00:03"),
     ]
-    orig, _ = save_transcript(segs, {}, target_lang="en", transcript_dir=str(tmp_path))
+    orig, _trans, _summaries = save_transcript(
+        segs, {}, target_lang="en", transcript_dir=str(tmp_path)
+    )
     content = Path(orig).read_text()
     assert content.count("Speaker 1") == 1
     # Speaker 2 header appears exactly once (not re-emitted on the consecutive line)

@@ -5,8 +5,6 @@ returns None when the underlying client raises.
 All external clients are mocked; no network calls, no model loads.
 """
 
-import sys
-import types
 from unittest.mock import MagicMock
 
 
@@ -88,61 +86,48 @@ def test_deepl_returns_none_on_exception(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_qwen_returns_string_from_generate(monkeypatch):
+def _inert_qwen(target_lang="es"):
+    """Build a QwenTranslator skipping __init__ (which spawns a subprocess)."""
+    from collections import OrderedDict
+
     from live_transcribe_core.translators import qwen as qmod
 
-    # Avoid real MLX load by constructing the translator then patching state.
     t = qmod.QwenTranslator.__new__(qmod.QwenTranslator)
-    t.target_lang = "es"
-    t._cache = __import__("collections").OrderedDict()
+    t.target_lang = target_lang
+    t._cache = OrderedDict()
     import threading
 
-    t._lock = threading.Lock()
-    t._gpu_lock = None
-    t._model = object()  # truthy placeholder
-    t._tokenizer = MagicMock()
-    t._tokenizer.apply_chat_template = MagicMock(return_value="prompt")
+    t._cache_lock = threading.Lock()
     t._available = True
+    t._degraded = False
+    t._on_status = None
+    return t
 
-    # Patch generate() at the lazy-import site: qwen's translate() does
-    # `from mlx_lm import generate` inside the function, so we intercept that.
-    fake_module = types.ModuleType("mlx_lm")
-    fake_module.generate = MagicMock(return_value="hola mundo")
-    monkeypatch.setitem(sys.modules, "mlx_lm", fake_module)
+
+def test_qwen_returns_string_from_subprocess(monkeypatch):
+    t = _inert_qwen()
+
+    fake_reply = MagicMock()
+    fake_reply.result = "hola mundo"
+    t._send_and_wait = MagicMock(return_value=fake_reply)
 
     assert t.translate("hello world", "en") == "hola mundo"
 
 
-def test_qwen_returns_none_when_unavailable():
-    from live_transcribe_core.translators import qwen as qmod
-
-    t = qmod.QwenTranslator.__new__(qmod.QwenTranslator)
-    t._available = False
-    t.target_lang = "es"
+def test_qwen_returns_none_when_degraded():
+    t = _inert_qwen()
+    t._degraded = True
     assert t.translate("hello", "en") is None
 
 
-def test_qwen_returns_none_on_exception(monkeypatch):
-    from live_transcribe_core.translators import qwen as qmod
+def test_qwen_returns_none_when_source_equals_target():
+    t = _inert_qwen(target_lang="en")
+    assert t.translate("hello", "en") is None
 
-    t = qmod.QwenTranslator.__new__(qmod.QwenTranslator)
-    t.target_lang = "es"
-    t._cache = __import__("collections").OrderedDict()
-    import threading
 
-    t._lock = threading.Lock()
-    t._gpu_lock = None
-    t._model = object()
-    t._tokenizer = MagicMock()
-    t._tokenizer.apply_chat_template = MagicMock(side_effect=RuntimeError("boom"))
-    t._available = True
-
-    # Prevent real mlx_lm import (via `from mlx_lm import generate` inside
-    # translate()); real Metal init on top of torch's causes a shutdown segfault.
-    fake_module = types.ModuleType("mlx_lm")
-    fake_module.generate = MagicMock()
-    monkeypatch.setitem(sys.modules, "mlx_lm", fake_module)
-
+def test_qwen_returns_none_when_subprocess_reply_missing():
+    t = _inert_qwen()
+    t._send_and_wait = MagicMock(return_value=None)
     assert t.translate("hello", "en") is None
 
 

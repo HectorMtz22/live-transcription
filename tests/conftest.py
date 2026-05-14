@@ -78,29 +78,40 @@ class FakeTranslator:
 
 
 class FakeQwenTranslator(QwenTranslator):
-    """Subclass so isinstance(t, QwenTranslator) passes, without loading MLX."""
+    """Subclass so isinstance(t, QwenTranslator) passes, without spawning the
+    real subprocess child or loading MLX."""
 
     def __init__(self, target_lang="en", responses=None, default=None):
-        # Skip super().__init__() — it loads the MLX model.
+        # Skip super().__init__() — it spawns a subprocess.
         self.target_lang = target_lang
-        self._gpu_lock = None
         self._available = True
+        self._degraded = False
+        self._on_status = None
         self.calls = []
+        self.retranslate_batch_calls = []
         self._responses = list(responses) if responses else []
         self._default = default
-        self.set_gpu_lock_calls = []
-
-    def set_gpu_lock(self, lock):
-        self._gpu_lock = lock
-        self.set_gpu_lock_calls.append(lock)
 
     def translate(self, text, source_lang, context=None):
         self.calls.append((text, source_lang, list(context) if context else None))
+        return self._next_response(text)
+
+    def retranslate_batch(self, items, context=None):
+        items = list(items)
+        self.retranslate_batch_calls.append(
+            (items, list(context) if context else None)
+        )
+        return [self._next_response(text) for text, _ in items]
+
+    def _next_response(self, text):
         if self._responses:
             return self._responses.pop(0)
         if self._default is not None:
             return self._default
         return f"<<{text}>>"
+
+    def stop(self):  # engine.stop() calls translator.stop()
+        return None
 
 
 class StubSummarizerProcess:
@@ -290,11 +301,10 @@ def patched_engine(monkeypatch):
             )
         )
 
-        def fake_transcribe(audio, model_repo, initial_prompt, gpu_lock):
-            with gpu_lock:
-                if len(results) > 1:
-                    return results.pop(0)
-                return results[0]
+        def fake_transcribe(audio, model_repo, initial_prompt):
+            if len(results) > 1:
+                return results.pop(0)
+            return results[0]
 
         def fake_load_vad():
             return FakeVAD(vad_script)
