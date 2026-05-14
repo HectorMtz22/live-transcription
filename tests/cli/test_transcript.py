@@ -6,11 +6,16 @@ Uses pytest's tmp_path fixture — no real disk pollution.
 from pathlib import Path
 
 from live_transcribe_core import SegmentEvent
+from live_transcribe_core.events import SummaryEvent
 from live_transcribe_cli.transcript import save_transcript
 
 
 def _seg(sid, speaker, text, lang="en", ts="00:00:00"):
     return SegmentEvent(id=sid, timestamp=ts, speaker=speaker, text=text, language=lang)
+
+
+def _sum(index, text, ts="00:00:00", is_final=False):
+    return SummaryEvent(index=index, timestamp=ts, text=text, is_final=is_final)
 
 
 def test_empty_segments_returns_empty_paths(tmp_path):
@@ -74,6 +79,40 @@ def test_missing_translation_falls_back_to_original_text(tmp_path):
     content = Path(trans).read_text()
     assert "hola" in content
     assert "world" in content  # fallback to original for seg 2
+
+
+def test_summaries_file_written_when_summaries_non_empty(tmp_path):
+    segs = [_seg("1", "Speaker 1", "hello")]
+    summaries = [
+        _sum(1, "first chunk recap", ts="00:00:05", is_final=False),
+        _sum(2, "shutdown recap", ts="00:00:10", is_final=True),
+    ]
+    _orig, _trans, summaries_path = save_transcript(
+        segments=segs,
+        translations={},
+        target_lang="en",
+        transcript_dir=str(tmp_path),
+        summaries=summaries,
+    )
+    assert summaries_path is not None
+    assert summaries_path.endswith("_summaries.txt")
+    content = Path(summaries_path).read_text()
+    assert "first chunk recap" in content
+    assert "shutdown recap" in content
+    assert "#1" in content
+    assert "FINAL SUMMARY #2" in content
+
+
+def test_summaries_alone_without_segments_does_not_write(tmp_path):
+    """Summaries are meaningless without their transcript — no files written."""
+    _orig, _trans, summaries_path = save_transcript(
+        segments=[],
+        translations={},
+        target_lang="en",
+        transcript_dir=str(tmp_path),
+        summaries=[_sum(1, "orphan")],
+    )
+    assert summaries_path is None
 
 
 def test_speaker_changes_produce_new_headers(tmp_path):

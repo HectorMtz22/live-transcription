@@ -37,6 +37,11 @@ def test_context_free_translation_is_cached():
     t._send_and_wait = MagicMock(return_value=fake_reply)
 
     assert t.translate("hello", "en") == "hola"
+    # Cache must be keyed on (text, source_lang); a wrong key shape would still
+    # let the second call hit (because get/put share the bug), so we pin it.
+    assert ("hello", "en") in t._cache
+    assert t._cache[("hello", "en")] == "hola"
+
     assert t.translate("hello", "en") == "hola"
     # Second call hit the cache, not the subprocess.
     assert t._send_and_wait.call_count == 1
@@ -88,3 +93,19 @@ def test_retranslate_batch_uses_subprocess_results():
 
     items = [("alpha", "en"), ("beta", "en")]
     assert t.retranslate_batch(items) == ["alpha-es", "beta-es"]
+
+
+def test_retranslate_batch_returns_none_list_when_subprocess_fails():
+    """If the child times out or dies mid-call, _send_and_wait returns None;
+    the caller must get a None-aligned list, not crash."""
+    t = _inert_qwen()
+    t._send_and_wait = MagicMock(return_value=None)
+    items = [("a", "en"), ("b", "en")]
+    assert t.retranslate_batch(items) == [None, None]
+
+
+def test_retranslate_batch_empty_items_returns_empty_list():
+    t = _inert_qwen()
+    # _send_and_wait must NOT be called at all on an empty batch.
+    t._send_and_wait = MagicMock(side_effect=AssertionError("should not be called"))
+    assert t.retranslate_batch([]) == []
