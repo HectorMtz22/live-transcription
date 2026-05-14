@@ -87,15 +87,29 @@ def main() -> None:
                         help="Enable live chunked summary via local LLM (every 5 transcript lines)")
     parser.add_argument("--diarize", choices=["on", "off"], default="off",
                         help="Speaker diarization (default: off)")
+    parser.add_argument("-c", "--continue", dest="continue_", action="store_true",
+                        help="Skip the wizard and start with the previous session's choices")
     args = parser.parse_args()
 
     print("\n\033[1mLive Transcribe - System Audio\033[0m\n")
 
     model_repo = MODEL_MAP[args.model]
     last_run = settings_store.load_last_run()
-    choices = wizard.run(args, last_run,
-                         model_repo=model_repo,
-                         diarize=(args.diarize == "on"))
+    diarize = args.diarize == "on"
+
+    choices: wizard.Choices | None = None
+    if args.continue_:
+        if last_run is None:
+            print("No previous session found — running the wizard.\n")
+        else:
+            devices = [(i, d["name"]) for i, d in enumerate(sd.query_devices())
+                       if d.get("max_input_channels", 0) > 0]
+            choices = wizard.build_from_last_run(args, last_run, devices)
+            if choices is not None:
+                wizard.render_summary(choices, model_repo=model_repo, diarize=diarize)
+
+    if choices is None:
+        choices = wizard.run(args, last_run, model_repo=model_repo, diarize=diarize)
     if choices is None:
         sys.exit(0)
 
@@ -115,7 +129,7 @@ def main() -> None:
             translate_langs=choices.translate_from,
             target_lang=choices.translate_to,
             enable_summary=choices.summary,
-            diarize=(args.diarize == "on"),
+            diarize=diarize,
         ),
         listener=display,
     )
