@@ -50,7 +50,12 @@ class Choices:
         }
 
 
-def _input_devices() -> list[tuple[int, str]]:
+def input_devices() -> list[tuple[int, str]]:
+    """Enumerate sounddevice input devices as (index, name) pairs.
+
+    Called once per invocation (in main.py) so we hit CoreAudio one time and
+    pass the result through wizard.run, build_from_last_run, and render_summary.
+    """
     return [
         (i, d["name"])
         for i, d in enumerate(sd.query_devices())
@@ -328,10 +333,14 @@ def build_from_last_run(
     )
 
 
-def render_summary(choices: Choices, *, model_repo: str, diarize: bool,
+def render_summary(choices: Choices, *, devices: list[tuple[int, str]],
+                   model_repo: str, diarize: bool,
                    title: str = "Continuing with last session") -> None:
-    """Render a read-only summary panel for the --continue path."""
-    devices = _input_devices()
+    """Render a read-only summary panel for the --continue path.
+
+    The caller passes `devices` so this function does no sounddevice I/O —
+    keeps the I/O boundary at main.py (one query per invocation).
+    """
     values = {
         "device_idx": choices.device_idx,
         "translator": choices.translator,
@@ -346,7 +355,7 @@ def render_summary(choices: Choices, *, model_repo: str, diarize: bool,
 
 def run(args, last_run: dict | None, *, model_repo: str, diarize: bool) -> Choices | None:
     """Drive the wizard. Returns Choices on Start, None on Quit or Ctrl+C."""
-    devices = _input_devices()
+    devices = input_devices()
     if not devices:
         print("error: no input devices found", file=sys.stderr)
         sys.exit(1)
