@@ -65,6 +65,33 @@ def _resolve_transcript_dir() -> str:
     return os.path.join(repo_root, "transcripts")
 
 
+def _continue_or_none(
+    args,
+    last_run: dict | None,
+    devices: list[tuple[int, str]],
+    *,
+    model_repo: str,
+    diarize: bool,
+) -> wizard.Choices | None:
+    """Resolve --continue: skip wizard with last_run choices, or fall through.
+
+    Returns Choices when --continue + a valid last_run produces a record.
+    Returns None when not in continue mode, or when last_run is missing
+    (after printing a notice). Callers fall back to wizard.run() on None.
+    """
+    if not args.continue_:
+        return None
+    if last_run is None:
+        print("No previous session found — running the wizard.\n")
+        return None
+    choices = wizard.build_from_last_run(args, last_run, devices)
+    if choices is not None:
+        wizard.render_summary(
+            choices, devices=devices, model_repo=model_repo, diarize=diarize
+        )
+    return choices
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Live system audio transcription with speaker diarization"
@@ -97,17 +124,14 @@ def main() -> None:
     last_run = settings_store.load_last_run()
     diarize = args.diarize == "on"
 
-    choices: wizard.Choices | None = None
-    if args.continue_:
-        if last_run is None:
-            print("No previous session found — running the wizard.\n")
-        else:
-            devices = [(i, d["name"]) for i, d in enumerate(sd.query_devices())
-                       if d.get("max_input_channels", 0) > 0]
-            choices = wizard.build_from_last_run(args, last_run, devices)
-            if choices is not None:
-                wizard.render_summary(choices, model_repo=model_repo, diarize=diarize)
+    devices = wizard.input_devices()
+    if not devices:
+        print("error: no input devices found", file=sys.stderr)
+        sys.exit(1)
 
+    choices = _continue_or_none(
+        args, last_run, devices, model_repo=model_repo, diarize=diarize
+    )
     if choices is None:
         choices = wizard.run(args, last_run, model_repo=model_repo, diarize=diarize)
     if choices is None:
