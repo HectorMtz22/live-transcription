@@ -6,6 +6,7 @@ transcripts/
 whisper-ko-lora/
 docs/superpowers/
 .worktrees/
+.claude/worktrees/
 
 ### macOS ###
 # General
