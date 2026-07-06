@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import queue
+import signal
 import threading
 import time
 import uuid
@@ -90,6 +91,13 @@ def _build_translate_prompt(text: str, source_lang: str, target_lang: str, conte
 
 def _worker(request_q: "mp.Queue", reply_q: "mp.Queue", model_repo: str):
     """Child process entry point. Loads the model and serves requests until None."""
+    # Ctrl+C sends SIGINT to the whole foreground process group, including this
+    # child. Ignore it here so the child survives and only ever exits via the
+    # None sentinel (or the parent's terminate() fallback in stop()); otherwise
+    # the default handler kills the child mid-shutdown and the parent watchdog
+    # would spuriously respawn a fresh model.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
     from mlx_lm import generate, load
 
     print(f"[QwenProcess] Loading model '{model_repo}'...", flush=True)
@@ -177,6 +185,9 @@ class QwenTranslator:
         self._watchdog_lock = threading.Lock()
         self._last_restart_at: Optional[float] = None
         self._degraded = False
+        # Set during intentional shutdown so the watchdog doesn't respawn a
+        # child that died to Ctrl+C. See begin_shutdown()/stop()/_on_failure().
+        self._stopping = False
 
         self._ctx = mp.get_context("spawn")
         self._request_queue = self._ctx.Queue()
@@ -239,7 +250,18 @@ class QwenTranslator:
                 self._cache_put(text, source_lang, result)
         return list(reply.results)
 
+    def begin_shutdown(self) -> None:
+        """Signal that shutdown has started so the watchdog stops restarting.
+
+        Idempotent and side-effect free: it only flips a flag. It does NOT
+        spawn, join, or terminate the child — that stays the job of stop().
+        Call this before draining any pool whose in-flight translate calls
+        might otherwise trip _on_failure() and respawn a Ctrl+C-killed child.
+        """
+        self._stopping = True
+
     def stop(self) -> None:
+        self._stopping = True
         if self._degraded or self._process is None:
             return
         try:
@@ -293,7 +315,9 @@ class QwenTranslator:
 
     def _on_failure(self) -> None:
         with self._watchdog_lock:
-            if self._degraded:
+            if self._degraded or self._stopping:
+                # During intentional shutdown a dead child is expected (Ctrl+C
+                # killed it); never respawn.
                 return
             if self._process is None or self._process.is_alive():
                 # Alive-but-slow: transient, no action.

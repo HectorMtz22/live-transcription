@@ -109,3 +109,86 @@ def test_retranslate_batch_empty_items_returns_empty_list():
     # _send_and_wait must NOT be called at all on an empty batch.
     t._send_and_wait = MagicMock(side_effect=AssertionError("should not be called"))
     assert t.retranslate_batch([]) == []
+
+
+# ---------------------------------------------------------------------------
+# Shutdown-aware watchdog (Ctrl+C should not spawn a fresh child).
+# ---------------------------------------------------------------------------
+
+
+def _dead_child_qwen(stopping):
+    """Inert translator wired for _on_failure: a dead (crashed) child, not
+    degraded, not in a restart cooldown, with _spawn_child mocked out."""
+    t = _inert_qwen()
+    t._stopping = stopping
+    t._watchdog_lock = threading.Lock()
+    t._last_restart_at = None
+    t._process = MagicMock()
+    t._process.is_alive.return_value = False  # child has died
+    t._spawn_child = MagicMock()
+    t._emits = []
+    t._on_status = lambda state, message: t._emits.append((state, message))
+    return t
+
+
+def test_on_failure_skips_restart_during_shutdown():
+    """When _stopping is set (Ctrl+C / engine shutdown), a dead child must NOT
+    be restarted — that spurious respawn is the bug this fix targets."""
+    t = _dead_child_qwen(stopping=True)
+
+    t._on_failure()
+
+    t._spawn_child.assert_not_called()
+    assert t._degraded is False
+    assert t._emits == []
+
+
+def test_on_failure_restarts_on_first_crash_when_not_stopping():
+    """Regression guard: a genuine mid-session crash (not shutting down) still
+    triggers exactly one restart, emitting warning then info."""
+    t = _dead_child_qwen(stopping=False)
+
+    t._on_failure()
+
+    t._spawn_child.assert_called_once()
+    assert t._degraded is False
+    assert [state for state, _ in t._emits] == ["warning", "info"]
+    assert t._last_restart_at is not None
+
+
+def test_begin_shutdown_sets_flag_and_is_idempotent():
+    t = _inert_qwen()
+    t._stopping = False
+
+    t.begin_shutdown()
+    assert t._stopping is True
+
+    # Calling twice must be harmless — no spawn/join/terminate, just the flag.
+    t.begin_shutdown()
+    assert t._stopping is True
+
+
+def test_worker_installs_sigint_ignore_handler(monkeypatch):
+    """The child worker must install SIG_IGN for SIGINT before loading the
+    model, so a Ctrl+C delivered to the foreground process group does not kill
+    it — it must exit only via the None sentinel."""
+    import signal
+
+    recorded = []
+
+    def spy_signal(signum, handler):
+        recorded.append((signum, handler))
+        return signal.SIG_DFL
+
+    # qmod.signal is the (shared) signal module; monkeypatch restores it.
+    monkeypatch.setattr(qmod.signal, "signal", spy_signal)
+
+    request_q = MagicMock()
+    request_q.get.return_value = None  # sentinel → _worker returns immediately
+    reply_q = MagicMock()
+
+    # mlx_lm is faked by the autouse guard in this dir's conftest, so load()
+    # returns instantly without touching Metal.
+    qmod._worker(request_q, reply_q, "fake-model")
+
+    assert (signal.SIGINT, signal.SIG_IGN) in recorded

@@ -165,6 +165,11 @@ class TranscriptionEngine:
     def stop(self) -> None:
         self._listener.on_status(StatusEvent("stopping"))
         self._running = False
+        # Tell Qwen we're shutting down BEFORE draining the pools (wait=True):
+        # Ctrl+C already killed its child, and an in-flight translate reaching
+        # the watchdog during the drain would otherwise respawn a fresh 8B model.
+        if isinstance(self._config.translator, QwenTranslator):
+            self._config.translator.begin_shutdown()
         if self._process_thread is not None:
             self._process_thread.join(timeout=5)
         if self._transcription_pool is not None:
