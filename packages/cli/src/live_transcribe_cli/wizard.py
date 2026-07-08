@@ -27,7 +27,11 @@ HARD_DEFAULTS = {
     "translate_to": "en",
     "display": "columns",
     "summary": False,
+    "whisper_mode": "dual",
 }
+
+_TRANSLATOR_CHOICES = {"google", "deepl", "qwen", "nllb", "none", "whisper"}
+_WHISPER_MODES = {"dual", "single"}
 
 
 @dataclass
@@ -38,6 +42,7 @@ class Choices:
     translate_to: str
     display: str
     summary: bool
+    whisper_mode: str = "dual"
 
     def to_persistable(self, device_name: str) -> dict[str, Any]:
         return {
@@ -47,6 +52,7 @@ class Choices:
             "translate_to": self.translate_to,
             "display": self.display,
             "summary": self.summary,
+            "whisper_mode": self.whisper_mode,
         }
 
 
@@ -81,7 +87,7 @@ def _seed_defaults(args, last_run: dict | None) -> dict[str, Any]:
     out: dict[str, Any] = dict(HARD_DEFAULTS)
     out["translate_from"] = set(out["translate_from"])  # detach from module-level frozenset
     if last_run:
-        if last_run.get("translator") in {"google", "deepl", "qwen", "nllb", "none"}:
+        if last_run.get("translator") in _TRANSLATOR_CHOICES:
             out["translator"] = last_run["translator"]
         tf = last_run.get("translate_from")
         if isinstance(tf, list):
@@ -94,9 +100,13 @@ def _seed_defaults(args, last_run: dict | None) -> dict[str, Any]:
             out["display"] = last_run["display"]
         if isinstance(last_run.get("summary"), bool):
             out["summary"] = last_run["summary"]
+        if last_run.get("whisper_mode") in _WHISPER_MODES:
+            out["whisper_mode"] = last_run["whisper_mode"]
 
     if args.translator is not None:
         out["translator"] = args.translator
+    if args.whisper_mode is not None:
+        out["whisper_mode"] = args.whisper_mode
     if args.translate_from is not None:
         out["translate_from"] = (
             set(LANG_NAMES) if args.translate_from == "all"
@@ -125,18 +135,42 @@ def _locked_fields(args) -> set[str]:
         locked.add("display")
     if args.summary is not None:
         locked.add("summary")
+    if args.whisper_mode is not None:
+        locked.add("whisper_mode")
     return locked
 
 
-_ORDER = ["device", "translator", "translate_from", "translate_to", "display", "summary"]
+_ORDER = [
+    "device", "translator", "whisper_mode",
+    "translate_from", "translate_to", "display", "summary",
+]
+
+
+def _visible_fields(values: dict, locked: set[str]) -> list[str]:
+    """Which picker steps are shown, given the current translator/mode.
+
+    - `whisper_mode` only for the Whisper-native translator.
+    - Whisper is English-only, so `translate_to` is always hidden (locked to en).
+    - `translate_from` is irrelevant in Whisper single-pass (everything decodes
+      straight to English), so it's hidden there; it's also hidden for "none".
+    """
+    visible = [f for f in _ORDER if f not in locked]
+    t = values["translator"]
+    if t != "whisper":
+        visible = [f for f in visible if f != "whisper_mode"]
+    if t == "none":
+        visible = [f for f in visible if f not in {"translate_from", "translate_to"}]
+    if t == "whisper":
+        visible = [f for f in visible if f != "translate_to"]
+        if values.get("whisper_mode") == "single":
+            visible = [f for f in visible if f != "translate_from"]
+    return visible
 
 
 def _run_linear(defaults: dict, locked: set[str], devices: list[tuple[int, str]]) -> dict:
     """Run pickers in order with a back-stack. Returns a values dict."""
     values: dict[str, Any] = dict(defaults)
-    visible = [f for f in _ORDER if f not in locked]
-    if values["translator"] == "none":
-        visible = [f for f in visible if f not in {"translate_from", "translate_to"}]
+    visible = _visible_fields(values, locked)
 
     i = 0
     while i < len(visible):
@@ -154,10 +188,17 @@ def _run_linear(defaults: dict, locked: set[str], devices: list[tuple[int, str]]
                 i -= 1
                 continue
             values["translator"] = result
-            visible = [f for f in _ORDER if f not in locked]
-            if values["translator"] == "none":
-                visible = [f for f in visible if f not in {"translate_from", "translate_to"}]
+            visible = _visible_fields(values, locked)
             i = visible.index("translator") + 1
+            continue
+        if field == "whisper_mode":
+            result = pickers.pick_whisper_mode(values["whisper_mode"], show_back)
+            if result is pickers.BACK:
+                i -= 1
+                continue
+            values["whisper_mode"] = result
+            visible = _visible_fields(values, locked)
+            i = visible.index("whisper_mode") + 1
             continue
         if field == "translate_from":
             result = pickers.pick_translate_from(values["translate_from"], show_back)
@@ -224,10 +265,26 @@ def _render_review(values: dict, devices: list[tuple[int, str]], locked: set[str
         "deepl": "DeepL",
         "qwen": "Qwen (local)",
         "nllb": "NLLB-200 (local)",
+        "whisper": "Whisper (native)",
         "none": "None",
     }[t]
     table.add_row("Translator:", translator_label + lock_tag("translator", "--translator"))
-    if t != "none":
+    if t == "whisper":
+        mode_label = {
+            "dual": "Keep original + English (dual-pass)",
+            "single": "English only (single-pass)",
+        }[values["whisper_mode"]]
+        table.add_row("Whisper mode:", mode_label + lock_tag("whisper_mode", "--whisper-mode"))
+        if values["whisper_mode"] == "dual":
+            from_names = ", ".join(sorted(
+                f"{LANG_NAMES.get(c, c)} ({c})" for c in values["translate_from"]
+            )) or "(none)"
+            table.add_row("Translate from:", from_names + lock_tag("translate_from", "--translate-from"))
+        table.add_row(
+            "Translate to:",
+            "English (en)  [yellow dim](locked: Whisper is English-only)[/]",
+        )
+    elif t != "none":
         from_names = ", ".join(sorted(
             f"{LANG_NAMES.get(c, c)} ({c})" for c in values["translate_from"]
         )) or "(none)"
@@ -250,23 +307,27 @@ def _render_review(values: dict, devices: list[tuple[int, str]], locked: set[str
     )
 
 
+_EDIT_LABELS = {
+    "device": "✎ Edit device",
+    "translator": "✎ Edit translator",
+    "whisper_mode": "✎ Edit whisper mode",
+    "translate_from": "✎ Edit translate from",
+    "translate_to": "✎ Edit translate to",
+    "display": "✎ Edit display",
+    "summary": "✎ Edit summary",
+}
+
+
 def _review_action(values: dict, locked: set[str]) -> str:
-    """Return one of: 'start', 'quit', 'edit:<field>'."""
+    """Return one of: 'start', 'quit', 'edit:<field>'.
+
+    Editable fields mirror the wizard's visible steps (`_visible_fields`), so
+    the Whisper-native rules (no translate_to; translate_from only in dual)
+    apply here too.
+    """
     choices: list[Choice] = [Choice(title="▶ Start", value="start")]
-    edit_items = [
-        ("device", "✎ Edit device"),
-        ("translator", "✎ Edit translator"),
-        ("translate_from", "✎ Edit translate from"),
-        ("translate_to", "✎ Edit translate to"),
-        ("display", "✎ Edit display"),
-        ("summary", "✎ Edit summary"),
-    ]
-    for field, label in edit_items:
-        if field in locked:
-            continue
-        if values["translator"] == "none" and field in {"translate_from", "translate_to"}:
-            continue
-        choices.append(Choice(title=label, value=f"edit:{field}"))
+    for field in _visible_fields(values, locked):
+        choices.append(Choice(title=_EDIT_LABELS[field], value=f"edit:{field}"))
     choices.append(Choice(title="✖ Quit", value="quit"))
     return q_select(
         "What next?",
@@ -284,6 +345,10 @@ def _edit_single(field: str, values: dict, devices: list[tuple[int, str]]) -> No
         r = pickers.pick_translator(values["translator"], show_back=True)
         if r is not pickers.BACK:
             values["translator"] = r
+    elif field == "whisper_mode":
+        r = pickers.pick_whisper_mode(values["whisper_mode"], show_back=True)
+        if r is not pickers.BACK:
+            values["whisper_mode"] = r
     elif field == "translate_from":
         r = pickers.pick_translate_from(values["translate_from"], show_back=True)
         if r is not pickers.BACK:
@@ -323,13 +388,26 @@ def build_from_last_run(
     ):
         values["translate_from"] = values["translate_from"] - {values["translate_to"]}
 
+    return _build_choices(values)
+
+
+def _build_choices(values: dict) -> Choices:
+    """Construct a Choices from a resolved values dict.
+
+    Whisper-native translation is English-only, so `translate_to` is forced to
+    "en" regardless of what was seeded.
+    """
+    translator = values["translator"]
+    translate_to = "en" if translator == "whisper" else values["translate_to"]
+    translate_from = values["translate_from"] if translator != "none" else set()
     return Choices(
         device_idx=values["device_idx"],
-        translator=values["translator"],
-        translate_from=values["translate_from"] if values["translator"] != "none" else set(),
-        translate_to=values["translate_to"],
+        translator=translator,
+        translate_from=translate_from,
+        translate_to=translate_to,
         display=values["display"],
         summary=values["summary"],
+        whisper_mode=values["whisper_mode"],
     )
 
 
@@ -348,6 +426,7 @@ def render_summary(choices: Choices, *, devices: list[tuple[int, str]],
         "translate_to": choices.translate_to,
         "display": choices.display,
         "summary": choices.summary,
+        "whisper_mode": choices.whisper_mode,
     }
     _render_review(values, devices, locked=set(), model_repo=model_repo,
                    diarize=diarize, title=title)
@@ -387,11 +466,4 @@ def run(args, last_run: dict | None, *, model_repo: str, diarize: bool) -> Choic
     except KeyboardInterrupt:
         return None
 
-    return Choices(
-        device_idx=values["device_idx"],
-        translator=values["translator"],
-        translate_from=values["translate_from"] if values["translator"] != "none" else set(),
-        translate_to=values["translate_to"],
-        display=values["display"],
-        summary=values["summary"],
-    )
+    return _build_choices(values)
