@@ -65,6 +65,23 @@ def test_whisper_mode_cli_override(devices):
     assert choices.whisper_mode == "single"
 
 
+def test_whisper_dual_keeps_all_sources_despite_stale_target(devices):
+    """A stale non-English target (left from a prior text-backend pick) must not
+    silently drop a matching Whisper source — Whisper's target is always en."""
+    last_run = {
+        "device_name": "Mic",
+        "translator": "whisper",
+        "whisper_mode": "dual",
+        "translate_from": ["ko", "es"],
+        "translate_to": "ko",  # stale; whisper forces en
+        "display": "columns",
+        "summary": False,
+    }
+    choices = wizard.build_from_last_run(_args(), last_run, devices)
+    assert choices.translate_to == "en"
+    assert choices.translate_from == {"ko", "es"}
+
+
 def test_to_persistable_round_trips_whisper_mode(devices):
     last_run = {"device_name": "Mic", "translator": "whisper", "whisper_mode": "single"}
     choices = wizard.build_from_last_run(_args(), last_run, devices)

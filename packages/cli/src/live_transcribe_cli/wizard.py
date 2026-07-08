@@ -227,7 +227,7 @@ def _run_linear(defaults: dict, locked: set[str], devices: list[tuple[int, str]]
         i += 1
 
     if isinstance(values.get("translate_from"), set) and isinstance(values.get("translate_to"), str):
-        values["translate_from"] = values["translate_from"] - {values["translate_to"]}
+        values["translate_from"] = values["translate_from"] - {_effective_translate_to(values)}
     return values
 
 
@@ -386,9 +386,19 @@ def build_from_last_run(
     if isinstance(values.get("translate_from"), set) and isinstance(
         values.get("translate_to"), str
     ):
-        values["translate_from"] = values["translate_from"] - {values["translate_to"]}
+        values["translate_from"] = values["translate_from"] - {_effective_translate_to(values)}
 
     return _build_choices(values)
+
+
+def _effective_translate_to(values: dict) -> str:
+    """The target language actually used. Whisper is English-only, so its target
+    is always "en" regardless of a stale `translate_to` left from a prior pick.
+
+    Used when dropping the target from `translate_from`, so a Whisper source
+    isn't silently removed just because a stale non-English target matches it.
+    """
+    return "en" if values["translator"] == "whisper" else values["translate_to"]
 
 
 def _build_choices(values: dict) -> Choices:
@@ -462,7 +472,7 @@ def run(args, last_run: dict | None, *, model_repo: str, diarize: bool) -> Choic
             if action.startswith("edit:"):
                 _edit_single(action.split(":", 1)[1], values, devices)
                 if isinstance(values.get("translate_from"), set):
-                    values["translate_from"] = values["translate_from"] - {values["translate_to"]}
+                    values["translate_from"] = values["translate_from"] - {_effective_translate_to(values)}
     except KeyboardInterrupt:
         return None
 
