@@ -46,9 +46,28 @@ def _build_translator(choice: str, target_lang: str):
         return QwenTranslator(target_lang=target_lang)
     if choice == "nllb":
         return NLLBTranslator(target_lang=target_lang)
-    if choice == "none":
+    if choice in ("none", "whisper"):
+        # "whisper" translates inside the engine (task="translate"), not via a
+        # Translator object.
         return None
     return GoogleTranslator(target_lang=target_lang)
+
+
+def _whisper_translate_mode(choices) -> str | None:
+    """Whisper-native translation mode ("dual"/"single"), or None if unused."""
+    return choices.whisper_mode if choices.translator == "whisper" else None
+
+
+def _has_translator(translator, choices) -> bool:
+    """Whether the display should show a translation lane.
+
+    True for any text translator, and for Whisper dual-pass (which emits
+    TranslationEvents). False for Whisper single-pass — its segment text is
+    already English and no separate translation is produced.
+    """
+    if translator is not None:
+        return True
+    return choices.translator == "whisper" and choices.whisper_mode == "dual"
 
 
 def _device_name(idx: int) -> str:
@@ -102,8 +121,14 @@ def main() -> None:
                         help="Whisper model: medium (fast, real-time), turbo (4 decoder layers), "
                              "or full (large-v3, 32 layers)")
     parser.add_argument("-t", "--translator",
-                        choices=["google", "deepl", "qwen", "nllb", "none"], default=None,
-                        help="Translation service: google, deepl, qwen, nllb, or none")
+                        choices=["google", "deepl", "qwen", "nllb", "whisper", "none"],
+                        default=None,
+                        help="Translation service: google, deepl, qwen, nllb, "
+                             "whisper (native, English-only), or none")
+    parser.add_argument("--whisper-mode", choices=["dual", "single"], default=None,
+                        help="Whisper-native translation mode (only with "
+                             "--translator whisper): dual (keep original + English) "
+                             "or single (English only)")
     parser.add_argument("--translate-from", default=None,
                         help="Comma-separated source language codes to translate (default: ko)")
     parser.add_argument("--translate-to", default=None,
@@ -141,10 +166,11 @@ def main() -> None:
     settings_store.save_last_run(choices.to_persistable(_device_name(choices.device_idx)))
 
     translator = _build_translator(choices.translator, choices.translate_to)
+    has_translator = _has_translator(translator, choices)
     if choices.display == "chat":
-        display = ChatDisplay(has_translator=translator is not None)
+        display = ChatDisplay(has_translator=has_translator)
     else:
-        display = ColumnsDisplay(has_translator=translator is not None)
+        display = ColumnsDisplay(has_translator=has_translator)
 
     engine = TranscriptionEngine(
         EngineConfig(
@@ -154,6 +180,7 @@ def main() -> None:
             target_lang=choices.translate_to,
             enable_summary=choices.summary,
             diarize=diarize,
+            whisper_translate=_whisper_translate_mode(choices),
         ),
         listener=display,
     )

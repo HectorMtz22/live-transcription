@@ -133,12 +133,19 @@ def transcribe(
     audio: np.ndarray,
     model_repo: str,
     initial_prompt: Optional[str],
+    task: str = "transcribe",
 ) -> dict:
-    """Run mlx-whisper with the engine's standard parameters."""
+    """Run mlx-whisper with the engine's standard parameters.
+
+    `task="translate"` uses Whisper's built-in speech-to-English translation
+    (always X→English); the default `task="transcribe"` keeps the source
+    language.
+    """
     return mlx_whisper.transcribe(
         audio,
         path_or_hf_repo=model_repo,
         initial_prompt=initial_prompt,
+        task=task,
         temperature=(0.0, 0.2, 0.4),
         condition_on_previous_text=False,
         compression_ratio_threshold=1.8,

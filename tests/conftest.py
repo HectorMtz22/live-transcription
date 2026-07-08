@@ -290,6 +290,8 @@ def patched_engine(monkeypatch):
         enable_summary=False,
         diarize=False,
         target_lang="en",
+        whisper_translate=None,
+        translate_result=None,
     ):
         results = (
             list(whisper_results)
@@ -301,7 +303,11 @@ def patched_engine(monkeypatch):
             )
         )
 
-        def fake_transcribe(audio, model_repo, initial_prompt):
+        def fake_transcribe(audio, model_repo, initial_prompt, task="transcribe"):
+            # Whisper-native translation runs a second decode with task="translate";
+            # return the scripted English result for those calls.
+            if task == "translate" and translate_result is not None:
+                return translate_result
             if len(results) > 1:
                 return results.pop(0)
             return results[0]
@@ -320,6 +326,7 @@ def patched_engine(monkeypatch):
             target_lang=target_lang,
             enable_summary=enable_summary,
             diarize=diarize,
+            whisper_translate=whisper_translate,
         )
         engine = TranscriptionEngine(config, listener)
         return engine, listener

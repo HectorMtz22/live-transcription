@@ -65,6 +65,12 @@ class EngineConfig:
     target_lang: str = "en"
     enable_summary: bool = False
     diarize: bool = False
+    # Whisper-native English translation: None (off) | "dual" | "single".
+    # When set, `translator` is None and `target_lang` is "en" (enforced by the
+    # CLI wiring). "dual" runs a second task="translate" decode per segment and
+    # keeps the source-language transcript; "single" replaces the transcribe
+    # pass with task="translate" so segment text is already English.
+    whisper_translate: Optional[str] = None
 
 
 class TranscriptionEngine:
@@ -297,12 +303,21 @@ class TranscriptionEngine:
 
     def _transcribe_segment(self, audio_data):
         try:
-            initial_prompt = INITIAL_PROMPTS.get(self._detected_lang)
+            if self._config.whisper_translate == "single":
+                # Single-pass Whisper-native translation: the transcription pass
+                # IS the translation. A source-language prompt would bias the
+                # English output, so pass none.
+                task = "translate"
+                initial_prompt = None
+            else:
+                task = "transcribe"
+                initial_prompt = INITIAL_PROMPTS.get(self._detected_lang)
 
             result = transcribe(
                 audio_data,
                 model_repo=self._config.whisper_model,
                 initial_prompt=initial_prompt,
+                task=task,
             )
 
             lang = result.get("language", "??")
@@ -327,12 +342,15 @@ class TranscriptionEngine:
                 segment_audio = audio_data[start_sample:end_sample]
                 speaker = self._speaker_tracker.identify_speaker(segment_audio)
 
+                # Track each group's audio span [start, end] so the dual-pass
+                # Whisper translate decode runs on exactly this group's audio.
                 if groups and groups[-1][0] == speaker:
                     groups[-1][1].append(text)
+                    groups[-1][3] = end_sample
                 else:
-                    groups.append((speaker, [text]))
+                    groups.append([speaker, [text], start_sample, end_sample])
 
-            for speaker, texts in groups:
+            for speaker, texts, group_start, group_end in groups:
                 full_text = " ".join(texts)
 
                 if self._duplicate_filter.is_duplicate(full_text):
@@ -421,11 +439,46 @@ class TranscriptionEngine:
                         and self._translation_pool is not None
                     ):
                         self._translation_pool.submit(self._retranslate_recent, lang)
+                elif (
+                    self._config.whisper_translate == "dual"
+                    and lang in self._config.translate_langs
+                    and lang != "en"
+                ):
+                    # Whisper-native dual-pass: run a second task="translate"
+                    # decode on this group's audio to get English. Runs inline on
+                    # the transcription worker (GPU work serializes there).
+                    group_audio = audio_data[group_start:group_end]
+                    translate_result = transcribe(
+                        group_audio,
+                        model_repo=self._config.whisper_model,
+                        initial_prompt=None,
+                        task="translate",
+                    )
+                    parts = [
+                        s["text"].strip()
+                        for s in translate_result.get("segments", [])
+                        if s.get("text", "").strip()
+                    ]
+                    full_translation = " ".join(parts).strip() or None
+
+                    entry["translation"] = full_translation
+                    self._listener.on_translation(
+                        TranslationEvent(
+                            segment_id=entry_id,
+                            text=full_translation or "",
+                            is_update=False,
+                        )
+                    )
+                    self._recent_context.append((full_text, full_translation))
                 else:
-                    # Translator configured but this language isn't in translate_langs —
-                    # emit an empty TranslationEvent so the display renders the segment
-                    # without waiting for a translation that will never arrive.
-                    if self._config.translator is not None:
+                    # Translator (or dual-pass Whisper) configured but this
+                    # language isn't eligible — emit an empty TranslationEvent so
+                    # the display renders the segment without waiting for a
+                    # translation that will never arrive.
+                    if (
+                        self._config.translator is not None
+                        or self._config.whisper_translate == "dual"
+                    ):
                         self._listener.on_translation(
                             TranslationEvent(
                                 segment_id=entry_id,

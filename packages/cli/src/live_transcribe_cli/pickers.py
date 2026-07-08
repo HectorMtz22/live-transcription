@@ -40,7 +40,13 @@ _TRANSLATORS = [
     ("deepl", "DeepL (cloud)"),
     ("qwen", "Qwen (local LLM, offline)"),
     ("nllb", "NLLB-200 (local, offline)"),
+    ("whisper", "Whisper (native, English-only, offline)"),
     ("none", "None (transcription only)"),
+]
+
+_WHISPER_MODES = [
+    ("dual", "Keep original + English (dual-pass)"),
+    ("single", "English only (single-pass)"),
 ]
 
 _DISPLAYS = [
@@ -73,6 +79,19 @@ def pick_translator(default: str, show_back: bool) -> str | _Back:
         choices.append(_BACK_CHOICE)
     return questionary.select(
         "Translation service:",
+        choices=choices,
+        default=next((c for c in choices if c.value == default), None),
+        style=STYLE,
+        instruction="(↑↓ navigate · enter confirm)",
+    ).unsafe_ask()
+
+
+def pick_whisper_mode(default: str, show_back: bool) -> str | _Back:
+    choices = [Choice(title=label, value=value) for value, label in _WHISPER_MODES]
+    if show_back:
+        choices.append(_BACK_CHOICE)
+    return questionary.select(
+        "Whisper mode:",
         choices=choices,
         default=next((c for c in choices if c.value == default), None),
         style=STYLE,

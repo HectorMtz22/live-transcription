@@ -18,6 +18,7 @@ def _args(**overrides):
         translate_to=overrides.get("translate_to"),
         display=overrides.get("display"),
         summary=overrides.get("summary"),
+        whisper_mode=overrides.get("whisper_mode"),
     )
 
 
