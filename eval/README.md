@@ -37,8 +37,17 @@ uv pip install -r requirements.txt
 
 Flags: `--limit` (default 150), `--dataset` (default `Bingsu/zeroth-korean`),
 `--whisper-model` (default `mlx-community/whisper-large-v3-mlx-4bit`),
-`--qwen-model` (default `mlx-community/Qwen3-ASR-1.7B-bf16`), `--out`
-(default `eval/results.md`).
+`--qwen-model` (default `mlx-community/Qwen3-ASR-1.7B-4bit`, 4-bit — see
+below), `--out` (default `eval/results.md`, always resolved relative to this
+script's own location, so it lands there **regardless of cwd** — whether you
+run `bench_korean_asr.py` from inside `eval/` as shown above, or
+`eval/bench_korean_asr.py` from the repo root).
+
+Qwen model default: `mlx-community/Qwen3-ASR-1.7B-4bit`, chosen for
+like-for-like quantization with the app's 4-bit Whisper. Pass
+`--qwen-model mlx-community/Qwen3-ASR-1.7B-bf16` to override for max
+accuracy. Confirm the exact repo id on Hugging Face on first download —
+mlx-community's Qwen3-ASR quantization naming may shift.
 
 ## What it measures
 
@@ -46,7 +55,11 @@ For each backend, over the same set of dataset utterances:
 
 - **CER / WER** — character/word error rate against the dataset reference
   text, computed with `jiwer` after normalizing both sides (`asr_eval.metrics.normalize_korean`:
-  NFC-normalize, strip Latin/CJK punctuation, collapse whitespace, lowercase).
+  NFC-normalize, replace Latin/CJK punctuation with a space, collapse
+  whitespace, lowercase). Note: this makes CER **space-sensitive** — Korean
+  spacing conventions (띄어쓰기) can shift CER slightly depending on where
+  punctuation sat in the source text, since it now leaves a separating
+  space rather than gluing adjacent words together.
 - **RTF (real-time factor)** — `processing_time / audio_duration` per
   utterance; reports mean, p95, and an aggregate `total` (sum of processing
   time / sum of duration).
@@ -69,6 +82,17 @@ Peak RAM is reported in the reason but **not auto-gated** — whether Qwen's
 memory footprint fits alongside the rest of the live pipeline (Whisper +
 Silero VAD + translator, all sharing the same Metal/MLX GPU context) is a
 judgment call for a human, not a hard threshold here.
+
+## Preprocessing
+
+Whisper is fed the app's exact frontend (high-pass filter + pad +
+peak-normalize, mirroring `whisper.py`'s `preprocess_audio` — see below),
+while Qwen3-ASR is fed raw 16 kHz mono audio, as its package expects. This
+asymmetry is **intentional**: each model is measured in its realistic
+deployment configuration, not on artificially identical inputs. A possible
+follow-up, if a purer model-quality signal is wanted instead of a deployment
+comparison, would be to also run both backends on symmetric (identically
+preprocessed, or identically raw) input.
 
 ## Whisper parameter replication
 

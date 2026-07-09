@@ -17,6 +17,11 @@ class Backend(Protocol):
         """Load the model; return elapsed load time in seconds."""
         ...
 
+    def unload(self) -> None:
+        """Release the loaded model so its memory doesn't linger and
+        contaminate the next backend's peak-RAM reading."""
+        ...
+
     def transcribe(self, audio: np.ndarray) -> str:
         """Transcribe a mono float32 audio array; return the text."""
         ...

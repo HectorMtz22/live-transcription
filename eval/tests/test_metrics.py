@@ -21,7 +21,16 @@ class TestNormalizeKorean:
         assert normalize_korean("안녕하세요。 반갑습니다！") == "안녕하세요 반갑습니다"
 
     def test_strips_curly_quotes_and_brackets(self):
-        assert normalize_korean("“안녕”「하세요」") == "안녕하세요"
+        # Punctuation is replaced with a space (not deleted outright, see
+        # test_replaces_punctuation_with_space_not_nothing), so adjacent
+        # punctuation marks between words collapse to a single separating
+        # space rather than gluing the words together.
+        assert normalize_korean("“안녕”「하세요」") == "안녕 하세요"
+
+    def test_replaces_punctuation_with_space_not_nothing(self):
+        # Punctuation between two words must become a separating space, not
+        # be deleted outright (which would glue unrelated words together).
+        assert normalize_korean("안녕,하세요") == "안녕 하세요"
 
     def test_collapses_whitespace_runs(self):
         assert normalize_korean("hello   world\t\n foo") == "hello world foo"

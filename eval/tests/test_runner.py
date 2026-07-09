@@ -133,10 +133,28 @@ class TestHeavyModulesAreImportableWithoutHeavyDeps:
         assert qwen.model_repo
         assert qwen.model is None
 
-    def test_whisper_backend_load_is_a_free_noop(self):
+    def test_whisper_backend_load_warms_up_via_mlx_whisper(self):
+        # load() now forces a warm-up transcribe so the model is loaded
+        # before the timed loop (I1) — the warm-up itself needs mlx_whisper,
+        # which isn't installed in this light test venv. Calling load() must
+        # surface that as an ImportError (lazy import deferred to call time),
+        # not raise it eagerly at module import time.
         from asr_eval.backends import WhisperBackend
 
-        assert WhisperBackend().load() == 0.0
+        with pytest.raises(ModuleNotFoundError):
+            WhisperBackend().load()
+
+    def test_whisper_backend_unload_is_safe_without_heavy_deps(self):
+        # unload() defensively swallows ImportError so it's safe to call
+        # even when mlx_whisper/mlx aren't installed (I2).
+        from asr_eval.backends import WhisperBackend
+
+        WhisperBackend().unload()  # must not raise
+
+    def test_qwen_backend_unload_is_safe_without_heavy_deps(self):
+        from asr_eval.backends import QwenBackend
+
+        QwenBackend().unload()  # must not raise
 
     def test_bench_cli_module_imports(self):
         import bench_korean_asr

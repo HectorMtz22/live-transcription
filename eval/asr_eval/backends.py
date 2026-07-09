@@ -24,7 +24,28 @@ INITIAL_PROMPT_KO = (
 )
 
 DEFAULT_WHISPER_MODEL_REPO = "mlx-community/whisper-large-v3-mlx-4bit"
-DEFAULT_QWEN_MODEL_REPO = "mlx-community/Qwen3-ASR-1.7B-bf16"
+# 4-bit to match the app's 4-bit Whisper (like-for-like quantization). Use
+# --qwen-model mlx-community/Qwen3-ASR-1.7B-bf16 to override for max
+# accuracy. Confirm the exact repo id on Hugging Face on first download —
+# mlx-community's Qwen3-ASR quantization naming may shift.
+DEFAULT_QWEN_MODEL_REPO = "mlx-community/Qwen3-ASR-1.7B-4bit"
+
+
+def _clear_mlx_cache() -> None:
+    """Best-effort release of MLX's cached GPU memory. Defensive: MLX may
+    not be installed (light test venv) or its cache API may have moved
+    between versions, so every failure mode is swallowed silently."""
+    try:
+        import mlx.core as mx
+
+        mx.clear_cache()
+    except Exception:
+        try:
+            import mlx.core as mx
+
+            mx.metal.clear_cache()
+        except Exception:
+            pass
 
 
 def _preprocess_audio(audio: np.ndarray) -> np.ndarray:
@@ -51,9 +72,29 @@ class WhisperBackend:
         self.model_repo = model_repo
 
     def load(self) -> float:
-        # mlx_whisper loads the model lazily on first transcribe() call —
-        # there's no separate load step worth timing here.
-        return 0.0
+        # mlx_whisper loads the model lazily on first transcribe() call, so
+        # force a warm-up here to move that load/compile cost out of the
+        # per-utterance RTF loop (symmetry with QwenBackend.load() below,
+        # which eagerly loads via from_pretrained()). The warm-up's output
+        # is discarded — it only needs to populate mlx_whisper's model cache.
+        import mlx_whisper
+
+        start = time.perf_counter()
+        warmup = np.zeros(SAMPLE_RATE // 10, dtype=np.float32)  # 0.1s silence
+        mlx_whisper.transcribe(warmup, path_or_hf_repo=self.model_repo, task="transcribe")
+        return time.perf_counter() - start
+
+    def unload(self) -> None:
+        # mlx_whisper caches the loaded model in a module-level ModelHolder;
+        # `del backend` does NOT free it. Clear it explicitly so it doesn't
+        # contaminate the next backend's peak-RAM reading.
+        try:
+            from mlx_whisper import transcribe as _mw
+
+            _mw.ModelHolder.model = None
+        except Exception:
+            pass
+        _clear_mlx_cache()
 
     def transcribe(self, audio: np.ndarray) -> str:
         import mlx_whisper
@@ -88,6 +129,10 @@ class QwenBackend:
         start = time.perf_counter()
         self.model = Qwen3ASR.from_pretrained(self.model_repo)
         return time.perf_counter() - start
+
+    def unload(self) -> None:
+        self.model = None
+        _clear_mlx_cache()
 
     def transcribe(self, audio: np.ndarray) -> str:
         result = self.model.transcribe(audio, language="ko", temperature=0.0)

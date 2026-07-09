@@ -19,7 +19,7 @@ import numpy as np
 # Korean ASR/reference transcripts.
 _EXTRA_PUNCT = ".,!?;:\"'()[]{}…·~-—。，！？、；：“”‘’「」『』（）"
 _PUNCT_CHARS = set(_EXTRA_PUNCT) | set(string.punctuation)
-_PUNCT_TABLE = {ord(ch): None for ch in _PUNCT_CHARS}
+_PUNCT_TABLE = {ord(ch): " " for ch in _PUNCT_CHARS}
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -29,7 +29,10 @@ def normalize_korean(text: str) -> str:
 
     1. Unicode NFC normalize (so precomposed and decomposed Hangul compare
        equal).
-    2. Strip punctuation (Latin + CJK/fullwidth + stdlib `string.punctuation`).
+    2. Replace punctuation with a space (Latin + CJK/fullwidth + stdlib
+       `string.punctuation`) — not delete outright, so punctuation between
+       two words (e.g. "안녕,하세요") becomes a separating space
+       ("안녕 하세요") rather than gluing the words together.
     3. Collapse whitespace runs to a single space and strip ends.
     4. Lowercase (harmless for Hangul, normalizes any Latin).
     """

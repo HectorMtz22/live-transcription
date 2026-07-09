@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import gc
 import threading
+from pathlib import Path
 
 from asr_eval.backends import (
     DEFAULT_QWEN_MODEL_REPO,
@@ -25,7 +26,10 @@ from asr_eval.runner import run_backend
 SAMPLE_RATE = 16000
 DEFAULT_LIMIT = 150
 DEFAULT_DATASET = "Bingsu/zeroth-korean"
-DEFAULT_OUT = "eval/results.md"
+# Anchored to this script's location (not cwd) so the default always lands
+# at eval/results.md on disk, whether invoked as `bench_korean_asr.py` from
+# inside eval/ or as `eval/bench_korean_asr.py` from the repo root.
+DEFAULT_OUT = str(Path(__file__).resolve().parent / "results.md")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -46,7 +50,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--qwen-model", default=DEFAULT_QWEN_MODEL_REPO,
-        help=f"Qwen3-ASR MLX model repo (default: {DEFAULT_QWEN_MODEL_REPO}).",
+        help=(
+            f"Qwen3-ASR MLX model repo (default: {DEFAULT_QWEN_MODEL_REPO}, "
+            "4-bit, to match the app's 4-bit Whisper). Override with "
+            "mlx-community/Qwen3-ASR-1.7B-bf16 for max accuracy — confirm "
+            "the exact repo id on first download."
+        ),
     )
     parser.add_argument(
         "--out", default=DEFAULT_OUT,
@@ -108,8 +117,8 @@ class _PeakRSSSampler:
         return self._peak_bytes / (1024 * 1024)
 
 
-def _evaluate(backend, samples) -> EvalResult:
-    with _PeakRSSSampler() as sampler:
+def _evaluate(backend, samples, sampler_factory=_PeakRSSSampler) -> EvalResult:
+    with sampler_factory() as sampler:
         load_secs = backend.load()
         hyps, refs, proc_times, durations = run_backend(
             backend, samples, sample_rate=SAMPLE_RATE
@@ -133,11 +142,13 @@ def main(argv: list[str] | None = None) -> None:
 
     whisper_backend = WhisperBackend(model_repo=args.whisper_model)
     whisper_result = _evaluate(whisper_backend, samples)
+    whisper_backend.unload()
     del whisper_backend
     gc.collect()
 
     qwen_backend = QwenBackend(model_repo=args.qwen_model)
     qwen_result = _evaluate(qwen_backend, samples)
+    qwen_backend.unload()
     del qwen_backend
     gc.collect()
 
@@ -145,6 +156,7 @@ def main(argv: list[str] | None = None) -> None:
         whisper_result, qwen_result, dataset=args.dataset, limit=args.limit
     )
     print(markdown)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(markdown)
 
