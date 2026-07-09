@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import argparse
 import gc
+import io
 import threading
 from pathlib import Path
+
+import numpy as np
 
 from asr_eval.backends import (
     DEFAULT_QWEN_MODEL_REPO,
@@ -52,9 +55,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--qwen-model", default=DEFAULT_QWEN_MODEL_REPO,
         help=(
             f"Qwen3-ASR MLX model repo (default: {DEFAULT_QWEN_MODEL_REPO}, "
-            "4-bit, to match the app's 4-bit Whisper). Override with "
-            "mlx-community/Qwen3-ASR-1.7B-bf16 for max accuracy — confirm "
-            "the exact repo id on first download."
+            "bf16 — qwen3-asr-mlx 0.1.1 can't load the 4-bit quantized "
+            "weights). Confirm the exact repo id on first download."
         ),
     )
     parser.add_argument(
@@ -64,18 +66,45 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _decode_audio(audio_field: dict) -> np.ndarray:
+    """Decode a datasets `Audio(decode=False)` field (`{"path": str|None,
+    "bytes": bytes|None}`) into a mono float32 array via `soundfile`.
+
+    `datasets`' built-in Audio decoding now requires `torchcodec`, which
+    isn't part of this eval venv; reading with `soundfile` (already a dep)
+    avoids that. `soundfile` is imported lazily here to keep the module's
+    existing lazy-import discipline (heavy deps stay out of module scope).
+    """
+    import soundfile as sf
+
+    path = audio_field.get("path")
+    if path:
+        audio, sr = sf.read(path, dtype="float32")
+    else:
+        audio, sr = sf.read(io.BytesIO(audio_field["bytes"]), dtype="float32")
+
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1).astype("float32")
+
+    if sr != SAMPLE_RATE:
+        raise ValueError(f"expected {SAMPLE_RATE} Hz, got {sr}")
+
+    return audio
+
+
 def _load_samples(dataset: str, limit: int) -> list[tuple[object, str]]:
-    """Lazy-load the dataset's test split, cast audio to 16kHz mono, take
-    `limit` utterances, and return [(float32 audio array, reference text)]."""
+    """Lazy-load the dataset's test split, decode audio via `soundfile`
+    (bypassing `datasets`' torchcodec-dependent auto-decoder), take `limit`
+    utterances, and return [(float32 audio array, reference text)]."""
     from datasets import Audio, load_dataset
 
     ds = load_dataset(dataset, split="test")
-    ds = ds.cast_column("audio", Audio(sampling_rate=SAMPLE_RATE))
+    ds = ds.cast_column("audio", Audio(decode=False))
     ds = ds.select(range(min(limit, len(ds))))
 
     samples = []
     for row in ds:
-        audio = row["audio"]["array"].astype("float32")
+        audio = _decode_audio(row["audio"])
         text = row["text"]
         samples.append((audio, text))
     return samples

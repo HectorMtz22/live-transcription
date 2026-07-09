@@ -69,10 +69,11 @@ class TestParseArgsDefaults:
         args = bench_korean_asr.parse_args([])
         assert args.dataset == "Bingsu/zeroth-korean"
 
-    def test_qwen_model_defaults_to_4bit_repo(self):
-        # C2: like-for-like quantization with the app's 4-bit Whisper.
+    def test_qwen_model_defaults_to_bf16_repo(self):
+        # qwen3-asr-mlx 0.1.1 can't load the 4-bit quantized weights, so
+        # bf16 is the only default that actually loads.
         args = bench_korean_asr.parse_args([])
-        assert args.qwen_model == "mlx-community/Qwen3-ASR-1.7B-4bit"
+        assert args.qwen_model == "mlx-community/Qwen3-ASR-1.7B-bf16"
 
     def test_out_default_resolves_under_eval_dir_regardless_of_cwd(self):
         # C1: the default must always land at eval/results.md on disk, even

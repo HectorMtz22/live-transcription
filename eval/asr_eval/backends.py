@@ -24,11 +24,12 @@ INITIAL_PROMPT_KO = (
 )
 
 DEFAULT_WHISPER_MODEL_REPO = "mlx-community/whisper-large-v3-mlx-4bit"
-# 4-bit to match the app's 4-bit Whisper (like-for-like quantization). Use
-# --qwen-model mlx-community/Qwen3-ASR-1.7B-bf16 to override for max
-# accuracy. Confirm the exact repo id on Hugging Face on first download —
-# mlx-community's Qwen3-ASR quantization naming may shift.
-DEFAULT_QWEN_MODEL_REPO = "mlx-community/Qwen3-ASR-1.7B-4bit"
+# bf16, not 4-bit: qwen3-asr-mlx 0.1.1 can't load the 4-bit quantized weights
+# (it rejects the .biases/.scales params the quantized checkpoint carries).
+# bf16 is the only repo that actually loads with this library version.
+# ~3 GB RAM at load. Confirm the exact repo id on Hugging Face on first
+# download — mlx-community's Qwen3-ASR quantization naming may shift.
+DEFAULT_QWEN_MODEL_REPO = "mlx-community/Qwen3-ASR-1.7B-bf16"
 
 
 def _clear_mlx_cache() -> None:
