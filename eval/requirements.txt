@@ -1,0 +1,15 @@
+# Deps for the REAL benchmark run (eval/bench_korean_asr.py).
+#
+# NOT installed by the eval unit tests — those only need jiwer/numpy/pytest
+# (see eval/README.md). This file is for the full offline A/B run, which
+# needs Apple Silicon + Python 3.10-3.13 + MLX 0.31+. Models download on
+# first run (several GB); Qwen supports a 4-bit repo override for lower RAM.
+
+jiwer
+psutil
+numpy
+scipy
+datasets
+soundfile
+mlx-whisper
+qwen3-asr-mlx
