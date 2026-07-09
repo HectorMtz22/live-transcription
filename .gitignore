@@ -8,6 +8,12 @@ docs/superpowers/
 .worktrees/
 .claude/worktrees/
 
+# eval/ — offline Korean ASR A/B benchmark (throwaway tooling, own venv)
+eval/.venv/
+eval/results*.md
+eval/results/
+eval/.pytest_cache/
+
 ### macOS ###
 # General
 .DS_Store
