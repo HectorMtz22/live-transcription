@@ -132,12 +132,16 @@ class QwenAsr:
         self,
         audio: np.ndarray,
         *,
-        initial_prompt: Optional[str] = None,  # noqa: ARG002 — Qwen uses lang_hint.
+        initial_prompt: Optional[str] = None,  # noqa: ARG002 — Whisper-only; Qwen has no prompt input.
         task: str = "transcribe",  # noqa: ARG002 — translate stays Whisper-only.
         lang_hint: Optional[str] = None,
     ) -> dict:
         model = self._load()
-        result = model.transcribe(audio, language=lang_hint, temperature=0.0)
+        # Always auto-detect per chunk. Forcing `language=lang_hint` (the engine's
+        # sticky `_detected_lang`) makes Qwen mislabel a chunk's language once a
+        # stale hint is set — e.g. a single "en" detection then reports English
+        # for Korean speech forever (TRANSLATION-7).
+        result = model.transcribe(audio, language=None, temperature=0.0)
         text = (getattr(result, "text", "") or "").strip()
         language = _to_iso_lang(getattr(result, "language", None), lang_hint)
 

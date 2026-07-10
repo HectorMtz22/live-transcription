@@ -125,9 +125,9 @@ def test_qwen_asr_synthesizes_single_segment(monkeypatch):
     # Confidence gate fields the engine reads must pass its filter.
     assert seg["avg_logprob"] >= -1.0
     assert seg["no_speech_prob"] <= 0.6
-    # Model was loaded from the configured repo and given the language hint.
+    # Model was loaded from the configured repo and auto-detects (no forced language).
     assert seen["repo"] == QWEN_ASR_MODEL
-    assert model.calls[0]["language"] == "ko"
+    assert model.calls[0]["language"] is None
     assert model.calls[0]["temperature"] == 0.0
 
 
@@ -161,6 +161,43 @@ def test_qwen_asr_passes_through_already_iso_language(monkeypatch):
     asr = QwenAsr()
     result = asr.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), lang_hint="en")
     assert result["language"] == "ko"
+
+
+def test_qwen_asr_never_forwards_lang_hint_as_forced_language(monkeypatch):
+    # The lang_hint must NOT be forced onto the model — Qwen auto-detects.
+    model, _ = _install_fake_qwen(
+        monkeypatch, _FakeQwenResult("전사된 텍스트", language="Korean")
+    )
+    asr = QwenAsr()
+    asr.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), lang_hint="en")
+    assert model.calls[0]["language"] is None
+
+
+def test_qwen_asr_stale_hint_no_longer_forces_language(monkeypatch):
+    # Regression (TRANSLATION-7): previously QwenAsr forced language=lang_hint,
+    # so a stale "en" hint made Qwen report English for Korean speech forever.
+    # Model here mimics real Qwen: a forced "en" mislabels; auto-detect finds
+    # the true language.
+    class _LangSensitiveModel:
+        def __init__(self):
+            self.calls = []
+
+        @classmethod
+        def from_pretrained(cls, repo):
+            return cls()
+
+        def transcribe(self, audio, language=None, temperature=0.0):
+            self.calls.append(language)
+            detected = "English" if language == "en" else "Korean"
+            return _FakeQwenResult("지난해 삼월", language=detected)
+
+    mod = types.ModuleType("qwen3_asr_mlx")
+    mod.Qwen3ASR = _LangSensitiveModel
+    monkeypatch.setitem(sys.modules, "qwen3_asr_mlx", mod)
+
+    asr = QwenAsr()
+    result = asr.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), lang_hint="en")
+    assert result["language"] == "ko"  # not "en" — the sticky-English trap is gone
 
 
 def test_qwen_asr_empty_text_yields_no_segments(monkeypatch):
