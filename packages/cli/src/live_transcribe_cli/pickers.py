@@ -35,6 +35,11 @@ STYLE = questionary.Style([
 ])
 
 
+_ASR_BACKENDS = [
+    ("whisper", "Whisper (mlx-whisper, default)"),
+    ("qwen", "Qwen3-ASR (local MLX, needs qwen-asr extra)"),
+]
+
 _TRANSLATORS = [
     ("google", "Google Translate (cloud)"),
     ("deepl", "DeepL (cloud)"),
@@ -71,6 +76,19 @@ def pick_device(devices: list[tuple[int, str]], default_idx: int) -> int:
         instruction="(↑↓ navigate · enter confirm)",
     ).unsafe_ask()
     return result
+
+
+def pick_asr_backend(default: str, show_back: bool) -> str | _Back:
+    choices = [Choice(title=label, value=value) for value, label in _ASR_BACKENDS]
+    if show_back:
+        choices.append(_BACK_CHOICE)
+    return questionary.select(
+        "ASR backend:",
+        choices=choices,
+        default=next((c for c in choices if c.value == default), None),
+        style=STYLE,
+        instruction="(↑↓ navigate · enter confirm)",
+    ).unsafe_ask()
 
 
 def pick_translator(default: str, show_back: bool) -> str | _Back:

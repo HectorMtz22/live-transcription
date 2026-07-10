@@ -21,7 +21,9 @@ from typing import Optional
 import numpy as np
 import torch
 
+from live_transcribe_core.asr import build_asr
 from live_transcribe_core.config import (
+    ASR_BACKENDS,
     DEFAULT_WHISPER_MODEL,
     ENERGY_THRESHOLD,
     INITIAL_PROMPTS,
@@ -71,6 +73,15 @@ class EngineConfig:
     # keeps the source-language transcript; "single" replaces the transcribe
     # pass with task="translate" so segment text is already English.
     whisper_translate: Optional[str] = None
+    # ASR backend for the main decode pass: "whisper" (default) or "qwen".
+    asr_backend: str = "whisper"
+
+    def __post_init__(self):
+        if self.asr_backend not in ASR_BACKENDS:
+            raise ValueError(
+                f"Unknown asr_backend {self.asr_backend!r} "
+                f"(expected one of {', '.join(ASR_BACKENDS)})"
+            )
 
 
 class TranscriptionEngine:
@@ -80,6 +91,7 @@ class TranscriptionEngine:
 
         self._speaker_tracker: Optional[SpeakerTracker] = None
         self._vad_model = None
+        self._asr = None
         self._summarizer: Optional[SummarizerProcess] = None
 
         self._transcription_pool: Optional[ThreadPoolExecutor] = None
@@ -115,6 +127,10 @@ class TranscriptionEngine:
 
         self._speaker_tracker = SpeakerTracker(enabled=self._config.diarize)
         self._vad_model = load_vad_model()
+        # Build the ASR backend from config. transcribe_fn is injected so the
+        # engine's monkeypatch seam keeps working and the Whisper path stays
+        # byte-for-byte identical to the pre-backend code.
+        self._asr = build_asr(self._config, transcribe_fn=transcribe)
 
         # Wire the engine's listener to Qwen status events (crash, restart, degraded).
         if isinstance(self._config.translator, QwenTranslator):
@@ -149,13 +165,8 @@ class TranscriptionEngine:
             )
             self._summarizer.start()
 
-        # Warm up Whisper.
-        dummy = np.zeros(SAMPLE_RATE, dtype=np.float32)
-        transcribe(
-            dummy,
-            model_repo=self._config.whisper_model,
-            initial_prompt=None,
-        )
+        # Warm up the ASR backend.
+        self._asr.warmup()
 
         self._running = True
         self._process_thread = threading.Thread(target=self._process_audio, daemon=True)
@@ -313,11 +324,11 @@ class TranscriptionEngine:
                 task = "transcribe"
                 initial_prompt = INITIAL_PROMPTS.get(self._detected_lang)
 
-            result = transcribe(
+            result = self._asr.transcribe(
                 audio_data,
-                model_repo=self._config.whisper_model,
                 initial_prompt=initial_prompt,
                 task=task,
+                lang_hint=self._detected_lang,
             )
 
             lang = result.get("language", "??")

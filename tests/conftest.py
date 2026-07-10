@@ -292,6 +292,7 @@ def patched_engine(monkeypatch):
         target_lang="en",
         whisper_translate=None,
         translate_result=None,
+        asr_backend="whisper",
     ):
         results = (
             list(whisper_results)
@@ -327,6 +328,7 @@ def patched_engine(monkeypatch):
             enable_summary=enable_summary,
             diarize=diarize,
             whisper_translate=whisper_translate,
+            asr_backend=asr_backend,
         )
         engine = TranscriptionEngine(config, listener)
         return engine, listener

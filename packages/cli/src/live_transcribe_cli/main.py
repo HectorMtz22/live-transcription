@@ -70,6 +70,58 @@ def _has_translator(translator, choices) -> bool:
     return choices.translator == "whisper" and choices.whisper_mode == "dual"
 
 
+def _asr_translator_conflict(asr_backend: str, translator: str) -> str | None:
+    """Return an error message if the ASR/translator combo is unsupported, else None.
+
+    Whisper-native translation (task="translate") is Whisper-only, so it cannot
+    be paired with the Qwen3-ASR backend. All other combinations are allowed.
+    """
+    if asr_backend == "qwen" and translator == "whisper":
+        return (
+            "--asr-backend qwen cannot be combined with the Whisper-native "
+            "translator (Whisper-native translation is Whisper-only). "
+            "Pick a text translator (google/deepl/qwen/nllb/none) or use "
+            "--asr-backend whisper."
+        )
+    return None
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Live system audio transcription with speaker diarization"
+    )
+    parser.add_argument("-d", "--device", type=int, default=None,
+                        help="Input device index (skip interactive prompt)")
+    parser.add_argument("-m", "--model", choices=["medium", "turbo", "full"], default="full",
+                        help="Whisper model: medium (fast, real-time), turbo (4 decoder layers), "
+                             "or full (large-v3, 32 layers)")
+    parser.add_argument("--asr-backend", choices=["whisper", "qwen"], default=None,
+                        help="Speech-to-text backend: whisper (default) or qwen "
+                             "(local Qwen3-ASR MLX, needs the 'qwen-asr' extra)")
+    parser.add_argument("-t", "--translator",
+                        choices=["google", "deepl", "qwen", "nllb", "whisper", "none"],
+                        default=None,
+                        help="Translation service: google, deepl, qwen, nllb, "
+                             "whisper (native, English-only), or none")
+    parser.add_argument("--whisper-mode", choices=["dual", "single"], default=None,
+                        help="Whisper-native translation mode (only with "
+                             "--translator whisper): dual (keep original + English) "
+                             "or single (English only)")
+    parser.add_argument("--translate-from", default=None,
+                        help="Comma-separated source language codes to translate (default: ko)")
+    parser.add_argument("--translate-to", default=None,
+                        help="Target language code (default: en)")
+    parser.add_argument("--display", choices=["columns", "chat"], default=None,
+                        help="Display mode: columns or chat")
+    parser.add_argument("--summary", choices=["on", "off"], default=None,
+                        help="Enable live chunked summary via local LLM (every 5 transcript lines)")
+    parser.add_argument("--diarize", choices=["on", "off"], default="off",
+                        help="Speaker diarization (default: off)")
+    parser.add_argument("-c", "--continue", dest="continue_", action="store_true",
+                        help="Skip the wizard and start with the previous session's choices")
+    return parser
+
+
 def _device_name(idx: int) -> str:
     try:
         return sd.query_devices(idx)["name"]
@@ -112,36 +164,7 @@ def _continue_or_none(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Live system audio transcription with speaker diarization"
-    )
-    parser.add_argument("-d", "--device", type=int, default=None,
-                        help="Input device index (skip interactive prompt)")
-    parser.add_argument("-m", "--model", choices=["medium", "turbo", "full"], default="full",
-                        help="Whisper model: medium (fast, real-time), turbo (4 decoder layers), "
-                             "or full (large-v3, 32 layers)")
-    parser.add_argument("-t", "--translator",
-                        choices=["google", "deepl", "qwen", "nllb", "whisper", "none"],
-                        default=None,
-                        help="Translation service: google, deepl, qwen, nllb, "
-                             "whisper (native, English-only), or none")
-    parser.add_argument("--whisper-mode", choices=["dual", "single"], default=None,
-                        help="Whisper-native translation mode (only with "
-                             "--translator whisper): dual (keep original + English) "
-                             "or single (English only)")
-    parser.add_argument("--translate-from", default=None,
-                        help="Comma-separated source language codes to translate (default: ko)")
-    parser.add_argument("--translate-to", default=None,
-                        help="Target language code (default: en)")
-    parser.add_argument("--display", choices=["columns", "chat"], default=None,
-                        help="Display mode: columns or chat")
-    parser.add_argument("--summary", choices=["on", "off"], default=None,
-                        help="Enable live chunked summary via local LLM (every 5 transcript lines)")
-    parser.add_argument("--diarize", choices=["on", "off"], default="off",
-                        help="Speaker diarization (default: off)")
-    parser.add_argument("-c", "--continue", dest="continue_", action="store_true",
-                        help="Skip the wizard and start with the previous session's choices")
-    args = parser.parse_args()
+    args = build_parser().parse_args()
 
     print("\n\033[1mLive Transcribe - System Audio\033[0m\n")
 
@@ -162,6 +185,11 @@ def main() -> None:
     if choices is None:
         sys.exit(0)
 
+    conflict = _asr_translator_conflict(choices.asr_backend, choices.translator)
+    if conflict:
+        print(f"error: {conflict}", file=sys.stderr)
+        sys.exit(2)
+
     # Persist choices (best-effort; never fatal)
     settings_store.save_last_run(choices.to_persistable(_device_name(choices.device_idx)))
 
@@ -181,6 +209,7 @@ def main() -> None:
             enable_summary=choices.summary,
             diarize=diarize,
             whisper_translate=_whisper_translate_mode(choices),
+            asr_backend=choices.asr_backend,
         ),
         listener=display,
     )
