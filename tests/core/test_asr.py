@@ -139,6 +139,30 @@ def test_qwen_asr_falls_back_to_lang_hint_when_model_omits_language(monkeypatch)
     assert result["segments"][0]["end"] == pytest.approx(0.5)
 
 
+def test_qwen_asr_maps_full_language_name_to_iso_code(monkeypatch):
+    # C1: qwen3_asr_mlx returns a full language name ("Korean"), but the
+    # engine's SUPPORTED_LANGUAGES gate expects an ISO code ("ko"). Without
+    # normalization every Qwen segment is silently dropped.
+    _install_fake_qwen(monkeypatch, _FakeQwenResult("전사된 텍스트", language="Korean"))
+    asr = QwenAsr()
+    result = asr.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), lang_hint="ko")
+    assert result["language"] == "ko"
+
+
+def test_qwen_asr_maps_english_language_name_to_iso_code(monkeypatch):
+    _install_fake_qwen(monkeypatch, _FakeQwenResult("hello", language="English"))
+    asr = QwenAsr()
+    result = asr.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), lang_hint="en")
+    assert result["language"] == "en"
+
+
+def test_qwen_asr_passes_through_already_iso_language(monkeypatch):
+    _install_fake_qwen(monkeypatch, _FakeQwenResult("hello", language="ko"))
+    asr = QwenAsr()
+    result = asr.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), lang_hint="en")
+    assert result["language"] == "ko"
+
+
 def test_qwen_asr_empty_text_yields_no_segments(monkeypatch):
     _install_fake_qwen(monkeypatch, _FakeQwenResult("   ", language="ko"))
     asr = QwenAsr()

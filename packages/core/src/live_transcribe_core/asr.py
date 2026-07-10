@@ -76,6 +76,27 @@ class WhisperAsr:
         )
 
 
+_QWEN_LANG_NAME_TO_ISO = {
+    "korean": "ko",
+    "english": "en",
+    "spanish": "es",
+}
+
+
+def _to_iso_lang(raw_language: Optional[str], lang_hint: Optional[str]) -> Optional[str]:
+    """Normalize a Qwen `result.language` value to an ISO-639-1 code.
+
+    Qwen3-ASR returns full language names (e.g. "Korean") rather than the ISO
+    codes the engine's `SUPPORTED_LANGUAGES` gate expects. Map the known names,
+    pass through anything already lowercase-ISO-shaped (or let other names
+    fail the gate correctly), and fall back to `lang_hint` (already ISO, from
+    the engine's own detection) when Qwen returns nothing.
+    """
+    if not raw_language:
+        return lang_hint
+    return _QWEN_LANG_NAME_TO_ISO.get(raw_language.lower(), raw_language.lower())
+
+
 class QwenAsr:
     """Qwen3-ASR (MLX) backend.
 
@@ -118,7 +139,7 @@ class QwenAsr:
         model = self._load()
         result = model.transcribe(audio, language=lang_hint, temperature=0.0)
         text = (getattr(result, "text", "") or "").strip()
-        language = getattr(result, "language", None) or lang_hint
+        language = _to_iso_lang(getattr(result, "language", None), lang_hint)
 
         segments = []
         if text:

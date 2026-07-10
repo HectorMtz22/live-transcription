@@ -30,11 +30,11 @@ The engine is driven by a three-stage producer/consumer orchestrated by `Transcr
 
 1. **`engine.push_audio(chunk)`** (any thread) — enqueues a `float32` mono @ 16 kHz chunk into `_audio_queue` under `_vad_lock`.
 2. **`_process_audio`** (engine-owned thread) — drains `_audio_queue`, runs Silero VAD per 512-sample frame, accumulates `_speech_buffer`. On end-of-speech (silence timeout) or max-duration cap, it submits the segment to `_transcription_pool` (1 worker).
-3. **`_transcribe_segment`** (transcription worker) — calls `live_transcribe_core.whisper.transcribe` under `_gpu_lock`, filters via `is_hallucination` + `DuplicateFilter`, groups segments by speaker, then for each group emits a `SegmentEvent` and submits translation work to `_translation_pool` (1 worker for Qwen, 4 otherwise).
+3. **`_transcribe_segment`** (transcription worker) — calls the configured `AsrBackend.transcribe(...)` (see "ASR backends" below), filters via `is_hallucination` + `DuplicateFilter`, groups segments by speaker, then for each group emits a `SegmentEvent` and submits translation work to `_translation_pool` (1 worker for Qwen, 4 otherwise).
 
 Key invariants to preserve when editing:
 
-- **`_gpu_lock` serializes Metal/MLX ops across Whisper and Qwen.** `start()` calls `translators.set_gpu_lock(self._gpu_lock)` on the configured translator. Any new MLX-GPU consumer must take this lock. The Summarizer sidesteps this by running in a **separate process** (`SummarizerProcess`, spawn context) with its own Metal context.
+- **The single-worker `_transcription_pool` serializes all ASR decode calls** (Whisper or Qwen — whichever backend is configured); there is no separate GPU lock. The Qwen *translator* runs independently on its own `_translation_pool`. The Summarizer sidesteps both pools by running in a **separate process** (`SummarizerProcess`, spawn context) with its own Metal context.
 - **Adaptive VAD** (`_adaptive_thresholds`): `silence_cap` and `max_speech_cap` scale linearly with `_pending_count`. When Whisper is backed up, VAD produces fewer, bigger chunks.
 - **Shutdown flushes the in-progress speech buffer.** `_process_audio`'s `finally` calls `_flush_speech_buffer()`; `stop()` then shuts the pools with `wait=True` so the final submission completes.
 - **Speech duration is measured from samples, not wall clock.** Wall clock drifts when the VAD thread catches up on queued audio.
@@ -64,9 +64,17 @@ translate(text: str, source_lang: str, context=None) -> Optional[str]
 - `context` is a list of `(original, translation)` tuples (last ~5 used). Google/DeepL/Qwen use it; NLLB ignores it.
 - Returning `None` means "skipped/failed" — callers fall back gracefully.
 - Only Qwen triggers `_retranslate_recent` to revise prior translations as context grows.
-- Qwen's GPU lock is injected via the capability helper: `translators.set_gpu_lock(translator, lock)`. The engine calls this inside `start()`.
 
 Chunking: Qwen translates the full text as one unit; the others get `whisper.chunk_for_translation` output translated in parallel and joined.
+
+### ASR backends
+
+The engine decodes audio through a pluggable `AsrBackend` (`packages/core/src/live_transcribe_core/asr.py`), built once at `start()` by `build_asr(config)` from `EngineConfig.asr_backend` (`"whisper"` default, or `"qwen"`):
+
+- `WhisperAsr` wraps `live_transcribe_core.whisper.transcribe` (mlx-whisper) — the default, always available.
+- `QwenAsr` drives the optional local Qwen3-ASR MLX model (`qwen3_asr_mlx`), lazily imported so it's only required when selected. Install via the `qwen-asr` extra (`uv sync --extra qwen-asr`). It returns a full language name (e.g. `"Korean"`) rather than an ISO code, so `QwenAsr` normalizes it before returning.
+
+Both backends return the same mlx-whisper-shaped `{"language": ..., "segments": [...]}` dict so `_transcribe_segment` doesn't need to branch. Selectable from the CLI via `--asr-backend {whisper,qwen}`.
 
 ### CLI (`live_transcribe_cli`)
 
