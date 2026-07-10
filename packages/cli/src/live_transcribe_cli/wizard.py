@@ -22,6 +22,7 @@ from . import pickers
 from .audio import find_blackhole_device
 
 HARD_DEFAULTS = {
+    "asr_backend": "whisper",
     "translator": "google",
     "translate_from": frozenset({"ko"}),
     "translate_to": "en",
@@ -32,6 +33,7 @@ HARD_DEFAULTS = {
 
 _TRANSLATOR_CHOICES = {"google", "deepl", "qwen", "nllb", "none", "whisper"}
 _WHISPER_MODES = {"dual", "single"}
+_ASR_BACKENDS = {"whisper", "qwen"}
 
 
 @dataclass
@@ -43,10 +45,12 @@ class Choices:
     display: str
     summary: bool
     whisper_mode: str = "dual"
+    asr_backend: str = "whisper"
 
     def to_persistable(self, device_name: str) -> dict[str, Any]:
         return {
             "device_name": device_name,
+            "asr_backend": self.asr_backend,
             "translator": self.translator,
             "translate_from": sorted(self.translate_from),
             "translate_to": self.translate_to,
@@ -87,6 +91,8 @@ def _seed_defaults(args, last_run: dict | None) -> dict[str, Any]:
     out: dict[str, Any] = dict(HARD_DEFAULTS)
     out["translate_from"] = set(out["translate_from"])  # detach from module-level frozenset
     if last_run:
+        if last_run.get("asr_backend") in _ASR_BACKENDS:
+            out["asr_backend"] = last_run["asr_backend"]
         if last_run.get("translator") in _TRANSLATOR_CHOICES:
             out["translator"] = last_run["translator"]
         tf = last_run.get("translate_from")
@@ -103,6 +109,8 @@ def _seed_defaults(args, last_run: dict | None) -> dict[str, Any]:
         if last_run.get("whisper_mode") in _WHISPER_MODES:
             out["whisper_mode"] = last_run["whisper_mode"]
 
+    if getattr(args, "asr_backend", None) is not None:
+        out["asr_backend"] = args.asr_backend
     if args.translator is not None:
         out["translator"] = args.translator
     if args.whisper_mode is not None:
@@ -125,6 +133,8 @@ def _locked_fields(args) -> set[str]:
     locked: set[str] = set()
     if args.device is not None:
         locked.add("device")
+    if getattr(args, "asr_backend", None) is not None:
+        locked.add("asr_backend")
     if args.translator is not None:
         locked.add("translator")
     if args.translate_from is not None:
@@ -141,7 +151,7 @@ def _locked_fields(args) -> set[str]:
 
 
 _ORDER = [
-    "device", "translator", "whisper_mode",
+    "device", "asr_backend", "translator", "whisper_mode",
     "translate_from", "translate_to", "display", "summary",
 ]
 
@@ -180,6 +190,14 @@ def _run_linear(defaults: dict, locked: set[str], devices: list[tuple[int, str]]
             values["device_idx"] = pickers.pick_device(
                 devices, values.get("device_idx", devices[0][0])
             )
+            i += 1
+            continue
+        if field == "asr_backend":
+            result = pickers.pick_asr_backend(values["asr_backend"], show_back)
+            if result is pickers.BACK:
+                i -= 1
+                continue
+            values["asr_backend"] = result
             i += 1
             continue
         if field == "translator":
@@ -255,6 +273,10 @@ def _render_review(values: dict, devices: list[tuple[int, str]], locked: set[str
         + lock_tag("device", "--device"),
     )
     table.add_row("Whisper model:", f"{model_repo}  [yellow dim](locked by --model)[/]")
+    asr_label = {"whisper": "Whisper (mlx-whisper)", "qwen": "Qwen3-ASR (local MLX)"}[
+        values.get("asr_backend", "whisper")
+    ]
+    table.add_row("ASR backend:", asr_label + lock_tag("asr_backend", "--asr-backend"))
     table.add_row(
         "Speaker diarization:",
         ("ON" if diarize else "OFF") + "  [yellow dim](locked by --diarize)[/]",
@@ -309,6 +331,7 @@ def _render_review(values: dict, devices: list[tuple[int, str]], locked: set[str
 
 _EDIT_LABELS = {
     "device": "✎ Edit device",
+    "asr_backend": "✎ Edit ASR backend",
     "translator": "✎ Edit translator",
     "whisper_mode": "✎ Edit whisper mode",
     "translate_from": "✎ Edit translate from",
@@ -341,6 +364,10 @@ def _edit_single(field: str, values: dict, devices: list[tuple[int, str]]) -> No
     """Mutate values in place. Back cancels (no change)."""
     if field == "device":
         values["device_idx"] = pickers.pick_device(devices, values["device_idx"])
+    elif field == "asr_backend":
+        r = pickers.pick_asr_backend(values["asr_backend"], show_back=True)
+        if r is not pickers.BACK:
+            values["asr_backend"] = r
     elif field == "translator":
         r = pickers.pick_translator(values["translator"], show_back=True)
         if r is not pickers.BACK:
@@ -418,6 +445,7 @@ def _build_choices(values: dict) -> Choices:
         display=values["display"],
         summary=values["summary"],
         whisper_mode=values["whisper_mode"],
+        asr_backend=values.get("asr_backend", "whisper"),
     )
 
 
@@ -431,6 +459,7 @@ def render_summary(choices: Choices, *, devices: list[tuple[int, str]],
     """
     values = {
         "device_idx": choices.device_idx,
+        "asr_backend": choices.asr_backend,
         "translator": choices.translator,
         "translate_from": choices.translate_from,
         "translate_to": choices.translate_to,

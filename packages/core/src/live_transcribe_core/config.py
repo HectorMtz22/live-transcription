@@ -11,6 +11,11 @@ WHISPER_MODEL_TURBO = "mlx-community/whisper-large-v3-turbo"
 WHISPER_MODEL_FULL = "mlx-community/whisper-large-v3-mlx-4bit"
 DEFAULT_WHISPER_MODEL = WHISPER_MODEL_FULL
 
+# ASR backends. "whisper" (default) drives mlx-whisper; "qwen" drives the
+# optional Qwen3-ASR MLX model (extra: live-transcribe-core[qwen-asr]).
+ASR_BACKENDS = ("whisper", "qwen")
+QWEN_ASR_MODEL = "mlx-community/Qwen3-ASR-1.7B-bf16"
+
 # Speaker tracking
 SPEAKER_SIMILARITY = 0.72
 NUM_SPEAKERS = 2

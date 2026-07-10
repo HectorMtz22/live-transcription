@@ -18,6 +18,11 @@ dependencies = [
     "python-dotenv",
 ]
 
+[project.optional-dependencies]
+# Opt-in Qwen3-ASR MLX backend. Lazy-imported; the runtime and test suite
+# work without it installed. Enable with: uv sync --extra qwen-asr
+qwen-asr = ["qwen3-asr-mlx"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
