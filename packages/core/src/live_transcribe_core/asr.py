@@ -117,7 +117,7 @@ class QwenAsr:
             except ImportError as exc:
                 raise RuntimeError(
                     "The Qwen3-ASR backend requires the optional 'qwen-asr' extra. "
-                    "Install it with:  uv sync --extra qwen-asr  "
+                    "Install it with:  uv sync --all-packages --extra qwen-asr  "
                     "(or:  pip install 'live-transcribe-core[qwen-asr]')."
                 ) from exc
             self._model = Qwen3ASR.from_pretrained(self._model_repo)

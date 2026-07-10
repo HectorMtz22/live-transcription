@@ -72,7 +72,7 @@ Chunking: Qwen translates the full text as one unit; the others get `whisper.chu
 The engine decodes audio through a pluggable `AsrBackend` (`packages/core/src/live_transcribe_core/asr.py`), built once at `start()` by `build_asr(config)` from `EngineConfig.asr_backend` (`"whisper"` default, or `"qwen"`):
 
 - `WhisperAsr` wraps `live_transcribe_core.whisper.transcribe` (mlx-whisper) — the default, always available.
-- `QwenAsr` drives the optional local Qwen3-ASR MLX model (`qwen3_asr_mlx`), lazily imported so it's only required when selected. Install via the `qwen-asr` extra (`uv sync --extra qwen-asr`). It returns a full language name (e.g. `"Korean"`) rather than an ISO code, so `QwenAsr` normalizes it before returning.
+- `QwenAsr` drives the optional local Qwen3-ASR MLX model (`qwen3_asr_mlx`), lazily imported so it's only required when selected. Install via the `qwen-asr` extra (`uv sync --all-packages --extra qwen-asr`). It returns a full language name (e.g. `"Korean"`) rather than an ISO code, so `QwenAsr` normalizes it before returning.
 
 Both backends return the same mlx-whisper-shaped `{"language": ..., "segments": [...]}` dict so `_transcribe_segment` doesn't need to branch. Selectable from the CLI via `--asr-backend {whisper,qwen}`.
 
