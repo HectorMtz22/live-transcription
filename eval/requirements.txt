@@ -3,13 +3,22 @@
 # NOT installed by the eval unit tests — those only need jiwer/numpy/pytest
 # (see eval/README.md). This file is for the full offline A/B run, which
 # needs Apple Silicon + Python 3.10-3.13 + MLX 0.31+. Models download on
-# first run (several GB); Qwen supports a 4-bit repo override for lower RAM.
+# first run (several GB).
+#
+# numpy/mlx/mlx-whisper/numba/llvmlite are pinned to the exact transitive
+# set proven to resolve on Python 3.13 (matches the runtime venv). Left
+# unpinned, uv backtracks mlx-whisper's numba dependency all the way down to
+# numba==0.53.1, which requires llvmlite==0.36 — and llvmlite 0.36 has no
+# wheel for Python >=3.10, so it tries (and fails) to build from source.
 
+numpy==2.4.4
+mlx==0.31.1
+mlx-whisper==0.4.3
+numba==0.65.0
+llvmlite==0.47.0
 jiwer
 psutil
-numpy
 scipy
 datasets
 soundfile
-mlx-whisper
 qwen3-asr-mlx

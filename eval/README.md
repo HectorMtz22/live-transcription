@@ -13,13 +13,13 @@ scopes to `tests/`, which this directory is not part of). Nothing under
 
 ## Setup
 
-Unit tests only need light deps (`jiwer`, `numpy`, `pytest`) and run in
-seconds with no model downloads:
+Unit tests only need light deps (`jiwer`, `numpy`, `pytest`, `soundfile`) and
+run in seconds with no model downloads or network access:
 
 ```sh
 cd eval
 uv venv
-uv pip install jiwer numpy pytest
+uv pip install jiwer numpy pytest soundfile
 .venv/bin/python -m pytest -q
 ```
 
@@ -37,17 +37,24 @@ uv pip install -r requirements.txt
 
 Flags: `--limit` (default 150), `--dataset` (default `Bingsu/zeroth-korean`),
 `--whisper-model` (default `mlx-community/whisper-large-v3-mlx-4bit`),
-`--qwen-model` (default `mlx-community/Qwen3-ASR-1.7B-4bit`, 4-bit — see
-below), `--out` (default `eval/results.md`, always resolved relative to this
+`--qwen-model` (default `mlx-community/Qwen3-ASR-1.7B-bf16` — see below),
+`--out` (default `eval/results.md`, always resolved relative to this
 script's own location, so it lands there **regardless of cwd** — whether you
 run `bench_korean_asr.py` from inside `eval/` as shown above, or
 `eval/bench_korean_asr.py` from the repo root).
 
-Qwen model default: `mlx-community/Qwen3-ASR-1.7B-4bit`, chosen for
-like-for-like quantization with the app's 4-bit Whisper. Pass
-`--qwen-model mlx-community/Qwen3-ASR-1.7B-bf16` to override for max
-accuracy. Confirm the exact repo id on Hugging Face on first download —
-mlx-community's Qwen3-ASR quantization naming may shift.
+Qwen model default: `mlx-community/Qwen3-ASR-1.7B-bf16`. This is **not**
+like-for-like quantization with the app's 4-bit Whisper — it's bf16 because
+`qwen3-asr-mlx` 0.1.1 cannot load the 4-bit quantized weights (it rejects the
+`.biases`/`.scales` params the quantized checkpoint carries). Confirm the
+exact repo id on Hugging Face on first download — mlx-community's Qwen3-ASR
+quantization naming may shift.
+
+**Memory note**: because Qwen runs at bf16, loading it needs ~3 GB of free
+RAM (vs. what a 4-bit load would need). A full run needs that much headroom
+free. If you're running in a sandboxed shell, the bf16 load may trip a
+memory watchdog and get killed — run the benchmark unsandboxed (directly in
+a normal terminal), not inside a sandboxed tool-calling shell.
 
 ## What it measures
 
